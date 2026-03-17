@@ -1,0 +1,15 @@
+astroid
+black
+chromadb
+faiss-cpu
+google-generativeai
+langchain
+langchain-community
+langgraph
+mypy
+openai
+pylint
+pymysql
+pytest
+python-dotenv
+streamlit
