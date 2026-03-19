@@ -13,3 +13,11 @@ pymysql
 pytest
 python-dotenv
 streamlit
+pygments
+tree-sitter
+tree-sitter-python
+tree-sitter-javascript
+tree-sitter-html
+tree-sitter-css
+python-magic
+chardet
