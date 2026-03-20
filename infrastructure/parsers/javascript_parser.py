@@ -5,8 +5,7 @@ Parser para JavaScript/TypeScript usando tree-sitter.
 import logging
 from pathlib import Path
 from typing import List, Dict, Any, Optional
-import tree_sitter_javascript as tsjavascript
-from tree_sitter import Language, Parser
+import re
 
 from infrastructure.parsers.base_parser import BaseParser
 
@@ -15,8 +14,7 @@ logger = logging.getLogger(__name__)
 
 class JavaScriptParser(BaseParser):
     """
-    Parser para JavaScript y TypeScript usando tree-sitter.
-    Extrae funciones, clases y dependencias.
+    Parser para JavaScript y TypeScript.
     """
     
     def __init__(self):
@@ -25,15 +23,19 @@ class JavaScriptParser(BaseParser):
             language="javascript",
             extensions=['.js', '.jsx', '.ts', '.tsx']
         )
+        logger.info("Parser JavaScript inicializado")
+    
+    def can_parse(self, file_path: Path) -> bool:
+        """
+        Verifica si el archivo puede ser parseado.
         
-        # Inicializar tree-sitter para JavaScript
-        try:
-            self.js_language = Language(tsjavascript.language())
-            self.parser = Parser(self.js_language)
-            logger.info("Parser JavaScript inicializado con tree-sitter")
-        except Exception as e:
-            logger.error(f"Error inicializando tree-sitter para JavaScript: {e}")
-            self.parser = None
+        Args:
+            file_path: Ruta del archivo
+            
+        Returns:
+            True si es archivo JavaScript/TypeScript
+        """
+        return file_path.suffix.lower() in self.extensions
     
     def parse_file(self, file_path: Path, content: str) -> Dict[str, Any]:
         """
@@ -46,186 +48,26 @@ class JavaScriptParser(BaseParser):
         Returns:
             Diccionario con funciones, clases e imports
         """
-        result = {
-            'functions': [],
-            'classes': [],
-            'imports': [],
-            'exports': []
+        return {
+            'functions': self.extract_functions(content),
+            'classes': self.extract_classes(content),
+            'imports': self.extract_imports(content),
+            'language': self.language
         }
-        
-        if not self.parser:
-            logger.warning("Parser no disponible, usando análisis básico")
-            return self._basic_parse(content)
-        
-        try:
-            # Parsear con tree-sitter
-            tree = self.parser.parse(bytes(content, 'utf-8'))
-            
-            if tree and tree.root_node:
-                # Extraer funciones
-                result['functions'] = self._extract_functions(tree.root_node, content)
-                
-                # Extraer clases
-                result['classes'] = self._extract_classes(tree.root_node, content)
-                
-                # Extraer imports
-                result['imports'] = self._extract_imports(tree.root_node, content)
-                
-                # Extraer exports
-                result['exports'] = self._extract_exports(tree.root_node, content)
-            
-            logger.debug(f"Archivo {file_path.name}: {len(result['functions'])} funciones, "
-                        f"{len(result['classes'])} clases")
-            
-        except Exception as e:
-            logger.error(f"Error en parseo tree-sitter: {e}")
-            return self._basic_parse(content)
-        
-        return result
     
-    def _extract_functions(self, node, content: str) -> List[Dict[str, Any]]:
-        """Extrae funciones del árbol AST."""
+    def extract_functions(self, content: str) -> List[Dict[str, Any]]:
+        """
+        Extrae funciones del contenido.
+        
+        Args:
+            content: Contenido del archivo
+            
+        Returns:
+            Lista de funciones
+        """
         functions = []
         
-        def visit(node):
-            # Función declaración: function name() {}
-            if node.type == 'function_declaration':
-                name_node = node.child_by_field_name('name')
-                params_node = node.child_by_field_name('parameters')
-                
-                name = self._get_node_text(name_node, content) if name_node else 'anonymous'
-                params = self._get_node_text(params_node, content) if params_node else '()'
-                
-                functions.append({
-                    'name': name,
-                    'line_start': node.start_point[0] + 1,
-                    'line_end': node.end_point[0] + 1,
-                    'parameters': params,
-                    'type': 'function'
-                })
-            
-            # Función flecha: const name = () => {}
-            elif node.type == 'arrow_function':
-                # Buscar nombre en variable declaración
-                parent = node.parent
-                if parent and parent.type == 'variable_declarator':
-                    name_node = parent.child_by_field_name('name')
-                    name = self._get_node_text(name_node, content) if name_node else 'anonymous'
-                    
-                    functions.append({
-                        'name': name,
-                        'line_start': node.start_point[0] + 1,
-                        'line_end': node.end_point[0] + 1,
-                        'parameters': '()',
-                        'type': 'arrow'
-                    })
-            
-            # Método de clase
-            elif node.type == 'method_definition':
-                name_node = node.child_by_field_name('name')
-                name = self._get_node_text(name_node, content) if name_node else 'method'
-                
-                functions.append({
-                    'name': name,
-                    'line_start': node.start_point[0] + 1,
-                    'line_end': node.end_point[0] + 1,
-                    'parameters': '()',
-                    'type': 'method'
-                })
-            
-            # Recorrer hijos
-            for child in node.children:
-                visit(child)
-        
-        visit(node)
-        return functions
-    
-    def _extract_classes(self, node, content: str) -> List[Dict[str, Any]]:
-        """Extrae clases del árbol AST."""
-        classes = []
-        
-        def visit(node):
-            if node.type == 'class_declaration':
-                name_node = node.child_by_field_name('name')
-                name = self._get_node_text(name_node, content) if name_node else 'anonymous'
-                
-                # Extraer métodos
-                methods = []
-                body = node.child_by_field_name('body')
-                if body:
-                    for child in body.children:
-                        if child.type == 'method_definition':
-                            method_name = self._get_node_text(
-                                child.child_by_field_name('name'), content
-                            ) or 'method'
-                            methods.append(method_name)
-                
-                classes.append({
-                    'name': name,
-                    'line_start': node.start_point[0] + 1,
-                    'line_end': node.end_point[0] + 1,
-                    'methods': methods[:10]  # Limitar a 10 métodos
-                })
-            
-            for child in node.children:
-                visit(child)
-        
-        visit(node)
-        return classes
-    
-    def _extract_imports(self, node, content: str) -> List[str]:
-        """Extrae declaraciones import/require."""
-        imports = []
-        
-        def visit(node):
-            # import ... from 'module'
-            if node.type == 'import_statement':
-                imports.append(self._get_node_text(node, content))
-            
-            # const x = require('module')
-            elif node.type == 'call_expression':
-                func = node.child_by_field_name('function')
-                if func and self._get_node_text(func, content) == 'require':
-                    imports.append(self._get_node_text(node, content))
-            
-            for child in node.children:
-                visit(child)
-        
-        visit(node)
-        return imports
-    
-    def _extract_exports(self, node, content: str) -> List[str]:
-        """Extrae declaraciones export."""
-        exports = []
-        
-        def visit(node):
-            if node.type in ['export_statement', 'export_default_declaration']:
-                exports.append(self._get_node_text(node, content))
-            
-            for child in node.children:
-                visit(child)
-        
-        visit(node)
-        return exports
-    
-    def _get_node_text(self, node, content: str) -> str:
-        """Obtiene el texto de un nodo."""
-        if not node:
-            return ''
-        start_byte = node.start_byte
-        end_byte = node.end_byte
-        return content[start_byte:end_byte]
-    
-    def _basic_parse(self, content: str) -> Dict[str, Any]:
-        """
-        Parseo básico cuando tree-sitter no está disponible.
-        Usa expresiones regulares simples.
-        """
-        import re
-        
-        functions = []
-        
-        # Buscar function nombre() {
+        # Función declaración: function name() {}
         func_pattern = r'function\s+([a-zA-Z_$][a-zA-Z0-9_$]*)\s*\([^)]*\)\s*\{'
         for match in re.finditer(func_pattern, content):
             functions.append({
@@ -234,7 +76,7 @@ class JavaScriptParser(BaseParser):
                 'type': 'function'
             })
         
-        # Buscar const nombre = () => {
+        # Función flecha: const name = () => {}
         arrow_pattern = r'(?:const|let|var)\s+([a-zA-Z_$][a-zA-Z0-9_$]*)\s*=\s*\([^)]*\)\s*=>\s*\{'
         for match in re.finditer(arrow_pattern, content):
             functions.append({
@@ -243,8 +85,20 @@ class JavaScriptParser(BaseParser):
                 'type': 'arrow'
             })
         
-        # Buscar clases
+        return functions
+    
+    def extract_classes(self, content: str) -> List[Dict[str, Any]]:
+        """
+        Extrae clases del contenido.
+        
+        Args:
+            content: Contenido del archivo
+            
+        Returns:
+            Lista de clases
+        """
         classes = []
+        
         class_pattern = r'class\s+([a-zA-Z_$][a-zA-Z0-9_$]*)'
         for match in re.finditer(class_pattern, content):
             classes.append({
@@ -252,9 +106,28 @@ class JavaScriptParser(BaseParser):
                 'line_start': content[:match.start()].count('\n') + 1
             })
         
-        return {
-            'functions': functions,
-            'classes': classes,
-            'imports': [],
-            'exports': []
-        }
+        return classes
+    
+    def extract_imports(self, content: str) -> List[str]:
+        """
+        Extrae importaciones del contenido.
+        
+        Args:
+            content: Contenido del archivo
+            
+        Returns:
+            Lista de imports
+        """
+        imports = []
+        
+        # import ... from 'module'
+        import_pattern = r'import\s+.*?\s+from\s+[\'"]([^\'"]+)[\'"]'
+        for match in re.finditer(import_pattern, content):
+            imports.append(f"import from {match.group(1)}")
+        
+        # require('module')
+        require_pattern = r'require\([\'"]([^\'"]+)[\'"]\)'
+        for match in re.finditer(require_pattern, content):
+            imports.append(f"require({match.group(1)})")
+        
+        return imports

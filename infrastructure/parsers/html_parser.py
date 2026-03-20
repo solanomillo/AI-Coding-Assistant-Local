@@ -1,6 +1,5 @@
 """
 Parser para HTML.
-Extrae estructura, scripts y estilos.
 """
 
 import logging
@@ -16,7 +15,6 @@ logger = logging.getLogger(__name__)
 class HTMLParser(BaseParser):
     """
     Parser para archivos HTML.
-    Extrae scripts, estilos y estructura básica.
     """
     
     def __init__(self):
@@ -26,6 +24,18 @@ class HTMLParser(BaseParser):
             extensions=['.html', '.htm']
         )
         logger.info("Parser HTML inicializado")
+    
+    def can_parse(self, file_path: Path) -> bool:
+        """
+        Verifica si el archivo puede ser parseado.
+        
+        Args:
+            file_path: Ruta del archivo
+            
+        Returns:
+            True si es archivo HTML
+        """
+        return file_path.suffix.lower() in self.extensions
     
     def parse_file(self, file_path: Path, content: str) -> Dict[str, Any]:
         """
@@ -38,30 +48,68 @@ class HTMLParser(BaseParser):
         Returns:
             Diccionario con estructura del HTML
         """
-        result = {
-            'title': self._extract_title(content),
-            'scripts': self._extract_scripts(content),
-            'styles': self._extract_styles(content),
-            'links': self._extract_links(content),
-            'images': self._extract_images(content),
-            'forms': self._extract_forms(content),
-            'meta_tags': self._extract_meta_tags(content),
-            'line_count': len(content.splitlines())
+        return {
+            'title': self.extract_title(content),
+            'scripts': self.extract_scripts(content),
+            'styles': self.extract_styles(content),
+            'links': self.extract_links(content),
+            'images': self.extract_images(content),
+            'forms': self.extract_forms(content),
+            'language': self.language
         }
-        
-        logger.debug(f"HTML parseado: {len(result['scripts'])} scripts, "
-                    f"{len(result['styles'])} estilos")
-        
-        return result
     
-    def _extract_title(self, content: str) -> str:
+    def extract_functions(self, content: str) -> List[Dict[str, Any]]:
+        """
+        HTML no tiene funciones, retorna lista vacía.
+        """
+        return []
+    
+    def extract_classes(self, content: str) -> List[Dict[str, Any]]:
+        """
+        HTML no tiene clases, retorna lista vacía.
+        """
+        return []
+    
+    def extract_imports(self, content: str) -> List[str]:
+        """
+        Extrae imports de scripts y estilos.
+        
+        Args:
+            content: Contenido del archivo
+            
+        Returns:
+            Lista de imports
+        """
+        imports = []
+        
+        # Scripts externos
+        script_pattern = r'<script[^>]*src=["\'](.*?)["\'][^>]*>'
+        for match in re.finditer(script_pattern, content, re.IGNORECASE):
+            imports.append(f"script: {match.group(1)}")
+        
+        # CSS externos
+        css_pattern = r'<link[^>]*href=["\'](.*?\.css[^"\']*)["\'][^>]*>'
+        for match in re.finditer(css_pattern, content, re.IGNORECASE):
+            imports.append(f"css: {match.group(1)}")
+        
+        return imports
+    
+    def extract_title(self, content: str) -> str:
         """Extrae el título de la página."""
         match = re.search(r'<title[^>]*>(.*?)</title>', content, re.IGNORECASE | re.DOTALL)
         return match.group(1).strip() if match else ''
     
-    def _extract_scripts(self, content: str) -> List[Dict[str, Any]]:
+    def extract_scripts(self, content: str) -> List[Dict[str, Any]]:
         """Extrae scripts inline y externos."""
         scripts = []
+        
+        # Scripts externos
+        src_pattern = r'<script[^>]*src=["\'](.*?)["\'][^>]*>'
+        for match in re.finditer(src_pattern, content, re.IGNORECASE):
+            scripts.append({
+                'type': 'external',
+                'src': match.group(1)
+            })
         
         # Scripts inline
         inline_pattern = r'<script[^>]*>(.*?)</script>'
@@ -70,48 +118,36 @@ class HTMLParser(BaseParser):
             if script_content:
                 scripts.append({
                     'type': 'inline',
-                    'content': script_content[:200] + '...' if len(script_content) > 200 else script_content,
-                    'line_start': content[:match.start()].count('\n') + 1
+                    'content': script_content[:200] + '...' if len(script_content) > 200 else script_content
                 })
-        
-        # Scripts externos
-        src_pattern = r'<script[^>]*src=["\'](.*?)["\'][^>]*>'
-        for match in re.finditer(src_pattern, content, re.IGNORECASE):
-            scripts.append({
-                'type': 'external',
-                'src': match.group(1),
-                'line_start': content[:match.start()].count('\n') + 1
-            })
         
         return scripts
     
-    def _extract_styles(self, content: str) -> List[Dict[str, Any]]:
-        """Extrae estilos CSS inline y externos."""
+    def extract_styles(self, content: str) -> List[Dict[str, Any]]:
+        """Extrae estilos CSS."""
         styles = []
         
-        # Estilos inline
+        # CSS externos
+        link_pattern = r'<link[^>]*href=["\'](.*?\.css[^"\']*)["\'][^>]*>'
+        for match in re.finditer(link_pattern, content, re.IGNORECASE):
+            styles.append({
+                'type': 'external',
+                'href': match.group(1)
+            })
+        
+        # CSS inline
         style_pattern = r'<style[^>]*>(.*?)</style>'
         for match in re.finditer(style_pattern, content, re.IGNORECASE | re.DOTALL):
             style_content = match.group(1).strip()
             if style_content:
                 styles.append({
                     'type': 'inline',
-                    'content': style_content[:200] + '...' if len(style_content) > 200 else style_content,
-                    'line_start': content[:match.start()].count('\n') + 1
+                    'content': style_content[:200] + '...' if len(style_content) > 200 else style_content
                 })
-        
-        # Estilos externos
-        link_pattern = r'<link[^>]*href=["\'](.*?\.css[^"\']*)["\'][^>]*>'
-        for match in re.finditer(link_pattern, content, re.IGNORECASE):
-            styles.append({
-                'type': 'external',
-                'href': match.group(1),
-                'line_start': content[:match.start()].count('\n') + 1
-            })
         
         return styles
     
-    def _extract_links(self, content: str) -> List[Dict[str, str]]:
+    def extract_links(self, content: str) -> List[Dict[str, str]]:
         """Extrae enlaces del documento."""
         links = []
         pattern = r'<a[^>]*href=["\'](.*?)["\'][^>]*>(.*?)</a>'
@@ -124,7 +160,7 @@ class HTMLParser(BaseParser):
         
         return links
     
-    def _extract_images(self, content: str) -> List[Dict[str, str]]:
+    def extract_images(self, content: str) -> List[Dict[str, str]]:
         """Extrae imágenes del documento."""
         images = []
         pattern = r'<img[^>]*src=["\'](.*?)["\'][^>]*>'
@@ -137,36 +173,19 @@ class HTMLParser(BaseParser):
         
         return images
     
-    def _extract_forms(self, content: str) -> List[Dict[str, Any]]:
+    def extract_forms(self, content: str) -> List[Dict[str, Any]]:
         """Extrae formularios."""
         forms = []
         pattern = r'<form[^>]*>(.*?)</form>'
         
         for match in re.finditer(pattern, content, re.IGNORECASE | re.DOTALL):
-            form_content = match.group(1)
             forms.append({
                 'method': self._extract_attr(match.group(0), 'method'),
                 'action': self._extract_attr(match.group(0), 'action'),
-                'inputs': len(re.findall(r'<input', form_content, re.IGNORECASE)),
-                'line_start': content[:match.start()].count('\n') + 1
+                'inputs': len(re.findall(r'<input', match.group(1), re.IGNORECASE))
             })
         
         return forms
-    
-    def _extract_meta_tags(self, content: str) -> List[Dict[str, str]]:
-        """Extrae meta tags."""
-        meta_tags = []
-        pattern = r'<meta[^>]*>'
-        
-        for match in re.finditer(pattern, content, re.IGNORECASE):
-            meta = match.group(0)
-            meta_tags.append({
-                'name': self._extract_attr(meta, 'name'),
-                'content': self._extract_attr(meta, 'content'),
-                'property': self._extract_attr(meta, 'property')
-            })
-        
-        return meta_tags
     
     def _extract_attr(self, tag: str, attr: str) -> str:
         """Extrae un atributo de una etiqueta HTML."""

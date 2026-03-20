@@ -92,9 +92,16 @@ class GeminiEmbedding:
         return embeddings
     
     def get_dimension(self) -> int:
-        """Retorna la dimensión de los embeddings."""
-        return self.dimension
-    
+        """
+        Retorna la dimensión de los embeddings generados por Gemini.
+        El modelo embedding-001 de Gemini retorna 3072 dimensiones.
+        
+        Returns:
+            Dimensión de los embeddings (3072 para Gemini)
+        """
+        # El modelo embedding-001 de Gemini tiene 3072 dimensiones
+        return 3072
+        
     @staticmethod
     def chunk_code(code: str, chunk_size: int = 1000, overlap: int = 200) -> List[str]:
         """

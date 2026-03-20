@@ -1,0 +1,23 @@
+# Normaliza automáticamente
+* text=auto
+
+# Forzar LF en código (IMPORTANTE)
+*.py text eol=lf
+*.js text eol=lf
+*.ts text eol=lf
+*.html text eol=lf
+*.css text eol=lf
+*.json text eol=lf
+*.md text eol=lf
+*.yml text eol=lf
+
+# Archivos de Windows
+*.bat text eol=crlf
+
+# Archivos binarios (no tocar)
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.pdf binary
+*.ico binary
