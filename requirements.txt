@@ -21,3 +21,5 @@ tree-sitter-html
 tree-sitter-css
 python-magic
 chardet
+langchain-core
+pydantic
