@@ -1,8 +1,6 @@
 """
-Repositorio de base de datos para operaciones con repositorios.
-
-Este módulo maneja todas las operaciones CRUD con MySQL para
-repositorios, archivos, funciones y clases.
+Repositorio MySQL para persistencia de metadatos.
+Renombrado y optimizado desde repository_repo.py
 """
 
 import pymysql
@@ -22,14 +20,16 @@ logger = logging.getLogger(__name__)
 
 class MySQLRepository:
     """
-    Repositorio MySQL para persistencia de datos de repositorios.
+    Repositorio MySQL para metadatos de repositorios.
     
-    Esta clase maneja todas las operaciones de base de datos relacionadas
-    con repositorios, archivos y sus componentes.
+    Almacena:
+    - Información de repositorios
+    - Metadatos de archivos
+    - Funciones y clases extraídas
     """
     
     def __init__(self):
-        """Inicializa la conexión a MySQL con configuración de entorno."""
+        """Inicializa la conexión a MySQL."""
         self.config = {
             'host': os.getenv('DB_HOST', 'localhost'),
             'user': os.getenv('DB_USER', 'root'),
@@ -38,36 +38,55 @@ class MySQLRepository:
             'charset': 'utf8mb4',
             'cursorclass': pymysql.cursors.DictCursor
         }
-        self._test_connection()
+        self._ensure_connection()
+        self._ensure_tables()
+        
+        logger.info("MySQLRepository inicializado")
+        logger.info(f"  Host: {self.config['host']}")
+        logger.info(f"  Database: {self.config['database']}")
     
     def _get_connection(self):
-        """
-        Obtiene una conexión a la base de datos.
-        
-        Returns:
-            Conexión MySQL
-        """
+        """Obtiene conexión a la base de datos."""
         return pymysql.connect(**self.config)
     
-    def _test_connection(self) -> None:
-        """Prueba la conexión a la base de datos."""
+    def _ensure_connection(self) -> None:
+        """Asegura que la conexión a MySQL funciona."""
         try:
             with self._get_connection() as conn:
                 conn.ping()
-            logger.info("Conexión a MySQL establecida correctamente")
+            logger.info("Conexión a MySQL establecida")
         except pymysql.Error as e:
             logger.error(f"Error conectando a MySQL: {e}")
             raise
     
+    def _ensure_tables(self) -> None:
+        """Asegura que las tablas necesarias existen."""
+        try:
+            with self._get_connection() as conn:
+                with conn.cursor() as cursor:
+                    # Verificar tablas
+                    cursor.execute("SHOW TABLES")
+                    tables = [t['Tables_in_' + self.config['database']] for t in cursor.fetchall()]
+                    
+                    required_tables = ['repositories', 'files', 'functions', 'classes']
+                    missing = [t for t in required_tables if t not in tables]
+                    
+                    if missing:
+                        logger.warning(f"Tablas faltantes: {missing}")
+                        logger.info("Ejecuta scripts/init_database.sql para crear las tablas")
+                    
+        except pymysql.Error as e:
+            logger.error(f"Error verificando tablas: {e}")
+    
     def save_repository(self, repository: Repository) -> int:
         """
-        Guarda un repositorio en la base de datos.
+        Guarda un repositorio y retorna su ID.
         
         Args:
             repository: Repositorio a guardar
             
         Returns:
-            ID del repositorio insertado
+            ID del repositorio
         """
         try:
             with self._get_connection() as conn:
@@ -94,7 +113,7 @@ class MySQLRepository:
                         self._save_file(conn, repo_id, file)
                     
                     conn.commit()
-                    logger.info(f"Repositorio {repository.name} guardado con ID: {repo_id}")
+                    logger.info(f"Repositorio guardado con ID: {repo_id}")
                     return repo_id
                     
         except pymysql.Error as e:
@@ -102,17 +121,7 @@ class MySQLRepository:
             raise
     
     def _save_file(self, conn, repository_id: int, file: CodeFile) -> int:
-        """
-        Guarda un archivo en la base de datos.
-        
-        Args:
-            conn: Conexión MySQL
-            repository_id: ID del repositorio
-            file: Archivo a guardar
-            
-        Returns:
-            ID del archivo insertado
-        """
+        """Guarda un archivo y retorna su ID."""
         with conn.cursor() as cursor:
             sql = """
                 INSERT INTO files 
@@ -144,17 +153,7 @@ class MySQLRepository:
             return file_id
     
     def _save_function(self, conn, file_id: int, function: Function) -> int:
-        """
-        Guarda una función en la base de datos.
-        
-        Args:
-            conn: Conexión MySQL
-            file_id: ID del archivo
-            function: Función a guardar
-            
-        Returns:
-            ID de la función insertada
-        """
+        """Guarda una función."""
         with conn.cursor() as cursor:
             sql = """
                 INSERT INTO functions 
@@ -172,17 +171,7 @@ class MySQLRepository:
             return cursor.lastrowid
     
     def _save_class(self, conn, file_id: int, class_obj: Class) -> int:
-        """
-        Guarda una clase en la base de datos.
-        
-        Args:
-            conn: Conexión MySQL
-            file_id: ID del archivo
-            class_obj: Clase a guardar
-            
-        Returns:
-            ID de la clase insertada
-        """
+        """Guarda una clase."""
         with conn.cursor() as cursor:
             sql = """
                 INSERT INTO classes 
@@ -197,25 +186,10 @@ class MySQLRepository:
                 class_obj.docstring,
                 class_obj.parent_class
             ))
-            
-            class_id = cursor.lastrowid
-            
-            # Guardar métodos de la clase
-            for method in class_obj.methods:
-                self._save_function(conn, file_id, method)
-            
-            return class_id
+            return cursor.lastrowid
     
     def get_repository(self, repo_id: int) -> Optional[Dict[str, Any]]:
-        """
-        Obtiene un repositorio por su ID.
-        
-        Args:
-            repo_id: ID del repositorio
-            
-        Returns:
-            Diccionario con datos del repositorio o None
-        """
+        """Obtiene un repositorio por ID."""
         try:
             with self._get_connection() as conn:
                 with conn.cursor() as cursor:
@@ -227,15 +201,7 @@ class MySQLRepository:
             return None
     
     def get_repository_by_path(self, path: str) -> Optional[Dict[str, Any]]:
-        """
-        Obtiene un repositorio por su ruta.
-        
-        Args:
-            path: Ruta del repositorio
-            
-        Returns:
-            Diccionario con datos del repositorio o None
-        """
+        """Obtiene un repositorio por ruta."""
         try:
             with self._get_connection() as conn:
                 with conn.cursor() as cursor:
@@ -243,16 +209,11 @@ class MySQLRepository:
                     cursor.execute(sql, (path,))
                     return cursor.fetchone()
         except pymysql.Error as e:
-            logger.error(f"Error obteniendo repositorio por ruta {path}: {e}")
+            logger.error(f"Error obteniendo repositorio por ruta: {e}")
             return None
     
     def list_repositories(self) -> List[Dict[str, Any]]:
-        """
-        Lista todos los repositorios.
-        
-        Returns:
-            Lista de repositorios
-        """
+        """Lista todos los repositorios."""
         try:
             with self._get_connection() as conn:
                 with conn.cursor() as cursor:
@@ -269,15 +230,7 @@ class MySQLRepository:
             return []
     
     def delete_repository(self, repo_id: int) -> bool:
-        """
-        Elimina un repositorio (cascada elimina archivos, funciones, clases).
-        
-        Args:
-            repo_id: ID del repositorio
-            
-        Returns:
-            True si se eliminó correctamente
-        """
+        """Elimina un repositorio (cascada)."""
         try:
             with self._get_connection() as conn:
                 with conn.cursor() as cursor:
@@ -289,23 +242,14 @@ class MySQLRepository:
             logger.error(f"Error eliminando repositorio {repo_id}: {e}")
             return False
     
-    def update_analysis_time(self, repo_id: int) -> bool:
-        """
-        Actualiza el timestamp del último análisis.
-        
-        Args:
-            repo_id: ID del repositorio
-            
-        Returns:
-            True si se actualizó correctamente
-        """
+    def get_files(self, repo_id: int) -> List[Dict[str, Any]]:
+        """Obtiene archivos de un repositorio."""
         try:
             with self._get_connection() as conn:
                 with conn.cursor() as cursor:
-                    sql = "UPDATE repositories SET last_analyzed = %s WHERE id = %s"
-                    cursor.execute(sql, (datetime.now(), repo_id))
-                    conn.commit()
-                    return cursor.rowcount > 0
+                    sql = "SELECT * FROM files WHERE repository_id = %s"
+                    cursor.execute(sql, (repo_id,))
+                    return cursor.fetchall()
         except pymysql.Error as e:
-            logger.error(f"Error actualizando análisis de {repo_id}: {e}")
-            return False
+            logger.error(f"Error obteniendo archivos: {e}")
+            return []
