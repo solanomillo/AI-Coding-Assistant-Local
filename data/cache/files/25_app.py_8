@@ -1,7 +1,0 @@
-    if st.button("📄 Reporte de Informaciones Generales", key="boton_reporte_general"):
-        with st.spinner("Generando Reporte 🦜"):
-            respuesta = orquestador.invoke({"input": "Quero um relatório com informações sobre os dados"})
-            st.session_state['reporte_general'] = respuesta["output"]
-    if 'reporte_general' in st.session_state:
-        with st.expander("Resultado: Reporte de Informaciones Generales"):
-            st.markdown(st.session_state['reporte_general'])

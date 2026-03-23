@@ -1,5 +1,0 @@
-                Con base en esta información, redacta un resumen claro y organizado que contenga:
-                1. Un título: ## Informe de información general sobre el dataset,
-                2. La dimensión total del DataFrame;
-                3. La descripción de cada columna (incluyendo nombre, tipo de dato y qué representa esa columna);
-                4. Las columnas que contienen datos nulos, con la respectiva cantidad;

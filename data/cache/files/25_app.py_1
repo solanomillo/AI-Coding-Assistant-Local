@@ -1,4 +1,0 @@
-Este asistente utiliza un agente, creado con Langchain, para ayudarte a explorar, analizar y visualizar datos de forma interactiva.
-Basta con subir un archivo CSV y podrás:
-* 📄 **Generar reportes automáticos**:
-  * **Reporte de información general**: presenta la dimensión del DataFrame, nombres y tipos de las columnas, conteo de datos nulos y duplicados, además de sugerencias de tratamientos y análisis adicionales.

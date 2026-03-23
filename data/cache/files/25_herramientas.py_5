@@ -1,8 +1,0 @@
-                5. Las columnas que contienen cadenas 'nan', con la respectiva cantidad;
-                6. La existencia (o no) de datos duplicados;
-                7. Un párrafo sobre los análisis que se pueden realizar con estos datos;
-                8. Un párrafo sobre los tratamientos que se pueden aplicar a los datos.
-               """,
-               input_variables = ['pregunta','shape','columns','nulos','nans_str','duplicados']
-    )
-    cadena = plantilla_respuesta | llm | StrOutputParser()

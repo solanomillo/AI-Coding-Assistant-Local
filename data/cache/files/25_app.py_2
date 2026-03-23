@@ -1,3 +1,0 @@
-  * **Reporte de estadísticas descriptivas**: muestra valores como media, mediana, desviación estándar, mínimo y máximo; identifica posibles outliers y sugiere próximos pasos con base en los patrones detectados.
-* 🔎 **Hacer preguntas simples sobre los datos**: como "¿Cuál es el promedio de la columna X?", "¿Cuántos registros existen para cada categoría de la columna Y?".
-* 📊 **Crear gráficos automáticamente** a partir de preguntas en lenguaje natural.
