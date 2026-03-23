@@ -66,12 +66,12 @@ class ExplainAgent(BaseAgent):
             
             if not fragments:
                 return {
-                    'answer': "No encontré información relevante en el repositorio para explicar.",
+                    'answer': "No encontré código relevante en el repositorio para explicar.",
                     'sources': [],
                     'agent': self.name
                 }
             
-            # Construir contexto
+            # Construir contexto con el código completo
             context_text = self._build_context_text(fragments)
             
             # Construir prompt
@@ -83,11 +83,11 @@ class ExplainAgent(BaseAgent):
             else:
                 answer = "Error: LLM no configurado"
             
-            # Preparar fuentes
+            # Preparar fuentes (preview del código)
             sources = [
                 {
-                    'file': f['metadata'].get('file', 'desconocido'),
-                    'preview': f['metadata'].get('preview', '')[:200],
+                    'file': f['file'],
+                    'preview': f['content'][:300] + "..." if len(f['content']) > 300 else f['content'],
                     'score': f.get('score', 0)
                 }
                 for f in fragments[:3]

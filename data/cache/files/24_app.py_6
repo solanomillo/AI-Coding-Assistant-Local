@@ -1,0 +1,8 @@
+            Thought: Debes siempre pensar en lo que debes hacer
+            Action: La acción que será ejecutada, debe ser una de las [{tool_names}]
+            Action Input: La entrada para la acción
+            Observation: El resultado de la acción
+            ... (este Thought/Action/Action Input/Observation puede repetirse N veces)
+            Thought: Ahora sé la respuesta final
+            Final Answer: La respuesta final para la pregunta de entrada inicial.
+            Comienza!

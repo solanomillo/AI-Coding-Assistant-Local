@@ -1,0 +1,9 @@
+            st.download_button(
+                label="📥 Descargar Reporte",
+                data=st.session_state['reporte_general'],
+                file_name="reporte_informaciones_generales.md",
+                mime="text/markdown"
+            )
+    if st.button("📄 Reporte de estadísticas descriptivas", key="boton_reporte_estadisticas"):
+        with st.spinner("Generando Reporte 🦜"):
+            respuesta = orquestador.invoke({"input": "Quiero un Reporte de estadísticas descriptivas"})

@@ -1,0 +1,6 @@
+    nans_str = df.apply(lambda col: col[~col.isna()].astype(str).str.strip().str.lower().eq('nan').sum())
+    duplicados = df.duplicated().sum()
+    plantilla_respuesta = PromptTemplate(
+    template = """
+               Eres un analista de datos encargado de presentar un resumen informativo sobre un **DataFrame** a partir de una {pregunta} hecha por el usuario.
+                A continuación, encontrarás la información general de la base de datos:

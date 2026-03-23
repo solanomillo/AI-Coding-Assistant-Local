@@ -1,0 +1,8 @@
+            Tienes acceso a un dataframe pandas llamado `df`.
+            Aquí están las primeras filas del DataFrame, obtenidas usando `df.head().to_markdown()`:
+            {df_head}
+            Responde a las siguientes preguntas de la mejor manera posible.
+            Para este fin, tienes acceso a las siguientes herramientas:
+            {tools}
+            Usa el siguiente formato:
+            Question: La pregunta de entrada que debes responder

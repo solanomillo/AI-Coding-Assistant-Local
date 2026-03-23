@@ -1,6 +1,6 @@
 """
 Servicio RAG con Gemini y FAISS.
-Versión optimizada con control de rate limiting.
+Versión optimizada con almacenamiento de fragmentos completos en caché.
 """
 
 import logging
@@ -26,6 +26,7 @@ logger = logging.getLogger(__name__)
 class RAGService:
     """
     Servicio RAG optimizado con control de rate limiting.
+    Almacena fragmentos completos en caché para recuperación precisa.
     """
     
     # Constantes optimizadas para free tier
@@ -78,6 +79,14 @@ class RAGService:
     ):
         """
         Inicializa servicio RAG optimizado.
+        
+        Args:
+            repo_name: Nombre del repositorio
+            repo_path: Ruta física del repositorio
+            repo_id: ID en base de datos
+            prefer_pro: Preferir modelos Pro de Gemini
+            max_file_size_mb: Tamaño máximo de archivo en MB
+            include_docs: Incluir archivos de documentación
         """
         self.repo_name = repo_name
         self.repo_path = repo_path
@@ -131,7 +140,7 @@ class RAGService:
         }
         
         logger.info("=" * 60)
-        logger.info("RAGGeminiService OPTIMIZADO inicializado")
+        logger.info("RAGService OPTIMIZADO inicializado")
         logger.info(f"Repositorio: {repo_name} (ID: {repo_id})")
         logger.info(f"Dimensión embeddings: {self.embedding_dimension}")
         logger.info(f"Extensiones válidas: {len(self.PRIORITY_EXTENSIONS)}")
@@ -300,7 +309,15 @@ class RAGService:
         return None
     
     def index_repository(self, repository: Repository) -> bool:
-        """Indexa repositorio completo."""
+        """
+        Indexa repositorio completo con almacenamiento de fragmentos en caché.
+        
+        Args:
+            repository: Repositorio a indexar
+            
+        Returns:
+            True si éxito
+        """
         start_time = time.time()
         self._cancelled = False
         
@@ -313,8 +330,8 @@ class RAGService:
                 logger.warning("No hay archivos válidos")
                 return False
             
-            all_chunks = []
-            all_metadata = []
+            all_vectors = []
+            all_ids = []
             
             logger.info("Generando fragmentos...")
             for file in valid_files:
@@ -330,51 +347,50 @@ class RAGService:
                     chunks = self._chunk_code_optimized(content, file.name)
                     
                     for i, chunk in enumerate(chunks):
-                        preview = chunk[:200] + "..." if len(chunk) > 200 else chunk
+                        # Crear ID único
+                        chunk_id = f"{self.repo_id}:{file.relative_path}:{i}"
                         
-                        metadata = {
-                            'repo_id': self.repo_id,
-                            'repo': self.repo_name,
-                            'file': file.relative_path,
-                            'file_name': file.name,
-                            'chunk_index': i,
-                            'preview': preview
-                        }
+                        # GUARDAR FRAGMENTO COMPLETO EN CACHÉ
+                        self.cache.put_chunk(chunk_id, chunk)
                         
-                        all_chunks.append(chunk)
-                        all_metadata.append(metadata)
+                        all_ids.append(chunk_id)
+                        all_vectors.append(None)  # Placeholder, se generará después
                         
                 except Exception as e:
                     logger.error(f"Error procesando {file.name}: {e}")
                     continue
             
-            self.stats['total_chunks'] = len(all_chunks)
-            logger.info(f"Fragmentos generados: {len(all_chunks)}")
+            self.stats['total_chunks'] = len(all_ids)
+            logger.info(f"Fragmentos generados: {len(all_ids)}")
             
-            if not all_chunks:
+            if not all_ids:
                 logger.warning("No se generaron fragmentos")
                 return False
             
+            # Procesar embeddings en lotes
             logger.info("Procesando embeddings...")
             
-            all_vectors = []
-            all_ids = []
-            all_metadatas = []
+            final_vectors = []
+            final_ids = []
             
-            for i in range(0, len(all_chunks), self.BATCH_SIZE):
+            for i in range(0, len(all_ids), self.BATCH_SIZE):
                 if self._cancelled or self._daily_limit_reached:
                     return False
                 
-                batch = all_chunks[i:i + self.BATCH_SIZE]
-                batch_metadata = all_metadata[i:i + self.BATCH_SIZE]
+                batch_ids = all_ids[i:i + self.BATCH_SIZE]
+                logger.info(f"Lote {i//self.BATCH_SIZE + 1}: {len(batch_ids)} fragmentos")
                 
-                logger.info(f"Lote {i//self.BATCH_SIZE + 1}: {len(batch)} fragmentos")
-                
-                for idx, (chunk, metadata) in enumerate(zip(batch, batch_metadata)):
+                for idx, chunk_id in enumerate(batch_ids):
                     if self._daily_limit_reached:
                         return False
                     
-                    vector = self._generate_embedding_with_retry(chunk)
+                    # Recuperar fragmento del caché
+                    chunk_content = self.cache.get_chunk(chunk_id)
+                    if not chunk_content:
+                        continue
+                    
+                    # Generar embedding
+                    vector = self._generate_embedding_with_retry(chunk_content)
                     
                     if vector is None:
                         continue
@@ -382,23 +398,20 @@ class RAGService:
                     if len(vector) != self.embedding_dimension:
                         continue
                     
-                    chunk_id = f"{self.repo_id}:{metadata['file']}:{metadata['chunk_index']}"
-                    
-                    all_vectors.append(vector)
-                    all_ids.append(chunk_id)
-                    all_metadatas.append(metadata)
+                    final_vectors.append(vector)
+                    final_ids.append(chunk_id)
                     
                     self.stats['chunks_processed'] += 1
                     
                     if self.stats['chunks_processed'] % 20 == 0:
                         logger.info(f"Progreso: {self.stats['chunks_processed']}/{self.stats['total_chunks']}")
                 
-                if i + self.BATCH_SIZE < len(all_chunks):
+                if i + self.BATCH_SIZE < len(all_ids):
                     logger.info(f"Pausa de {self.BATCH_DELAY} segundos...")
                     time.sleep(self.BATCH_DELAY)
             
-            if all_vectors:
-                self.vector_store.add_vectors(all_vectors, all_ids, all_metadatas)
+            if final_vectors:
+                self.vector_store.add_vectors(final_vectors, final_ids)
                 
                 elapsed = time.time() - start_time
                 logger.info("=" * 60)
@@ -414,10 +427,21 @@ class RAGService:
                 
         except Exception as e:
             logger.error(f"Error en indexación: {e}")
+            logger.error(traceback.format_exc())
             return False
     
     def query(self, question: str, k: int = 5, include_sources: bool = True) -> Dict[str, Any]:
-        """Realiza consulta RAG."""
+        """
+        Realiza consulta RAG recuperando fragmentos completos del caché.
+        
+        Args:
+            question: Pregunta del usuario
+            k: Número de fragmentos a recuperar
+            include_sources: Incluir fuentes en respuesta
+            
+        Returns:
+            Diccionario con respuesta y fuentes
+        """
         start_time = time.time()
         
         try:
@@ -426,34 +450,22 @@ class RAGService:
             if len(question) > 500:
                 question = question[:500]
             
-            # Intentar generar embedding
-            try:
-                query_vector = self._generate_embedding_with_retry(question)
-            except Exception as e:
-                logger.error(f"Error generando embedding: {e}")
-                return {
-                    'answer': f"Error generando embedding: {str(e)}",
-                    'sources': []
-                }
-            
+            # Generar embedding de la pregunta
+            query_vector = self._generate_embedding_with_retry(question)
             if query_vector is None:
                 return {
                     'answer': "Error generando embedding. Intenta de nuevo.",
                     'sources': []
                 }
             
-            # Validar dimensión del embedding
-            logger.debug(f"Embedding generado: {len(query_vector)} dimensiones")
-            
             if len(query_vector) != self.embedding_dimension:
                 logger.error(f"Embedding dimensión incorrecta: {len(query_vector)} != {self.embedding_dimension}")
-                logger.error(f"Embedding muestra: {query_vector[:10] if query_vector else 'None'}")
                 return {
-                    'answer': f"Error: El embedding generado tiene dimensión {len(query_vector)} pero se esperaban {self.embedding_dimension}. Por favor, intenta de nuevo.",
+                    'answer': f"Error: Dimensión incorrecta.",
                     'sources': []
                 }
             
-            # Buscar en FAISS
+            # Buscar en FAISS (solo IDs)
             results = self.vector_store.search(query_vector, k=min(k, 10))
             
             if not results:
@@ -462,18 +474,41 @@ class RAGService:
                     'sources': []
                 }
             
+            # 🔥 RECUPERAR FRAGMENTOS COMPLETOS DEL CACHÉ
+            fragments = []
+            for r in results:
+                chunk_id = r['id']
+                content = self.cache.get_chunk(chunk_id)
+                if content:
+                    # Extraer nombre del archivo del ID
+                    parts = chunk_id.split(':')
+                    file_name = parts[1] if len(parts) > 1 else 'desconocido'
+                    
+                    fragments.append({
+                        'id': chunk_id,
+                        'file': file_name,
+                        'content': content,
+                        'score': r['score']
+                    })
+            
+            if not fragments:
+                return {
+                    'answer': "No se pudo recuperar el contenido de los fragmentos encontrados.",
+                    'sources': []
+                }
+            
+            # Construir contexto con fragmentos completos
             context_parts = []
             sources_for_display = []
             
-            for i, r in enumerate(results[:5]):
-                metadata = r['metadata']
-                preview = metadata.get('preview', '')[:300]
+            for i, f in enumerate(fragments[:5]):
+                preview = f['content'][:500] + "..." if len(f['content']) > 500 else f['content']
                 
-                context_parts.append(f"[{i+1}] {metadata['file']}\n{preview}\n")
+                context_parts.append(f"[{i+1}] Archivo: {f['file']}\n{f['content']}\n")
                 sources_for_display.append({
-                    'file': metadata['file'],
+                    'file': f['file'],
                     'preview': preview,
-                    'score': round(r.get('score', 0), 3)
+                    'score': round(f['score'], 3)
                 })
             
             context = "\n---\n".join(context_parts)
@@ -487,7 +522,8 @@ class RAGService:
                 'answer': answer,
                 'sources': sources_for_display if include_sources else [],
                 'model_used': self.llm.current_model,
-                'elapsed_seconds': round(elapsed, 2)
+                'elapsed_seconds': round(elapsed, 2),
+                'fragments_used': len(fragments)
             }
             
         except Exception as e:
@@ -501,12 +537,19 @@ class RAGService:
         """Construye prompt optimizado."""
         return f"""Eres un experto en análisis de código. Responde basándote en el contexto.
 
-                    CONTEXTO:
-                    {context}
+CONTEXTO DEL CÓDIGO:
+{context}
 
-                    PREGUNTA: {question}
+PREGUNTA: {question}
 
-                    RESPUESTA:"""
+INSTRUCCIONES:
+- Analiza el código proporcionado en el contexto
+- Responde basándote ÚNICAMENTE en el código que ves
+- Si el código no está presente, indícalo claramente
+- Sé técnico y preciso
+- Usa formato de código con ``` cuando sea necesario
+
+RESPUESTA:"""
     
     def get_stats(self) -> Dict[str, Any]:
         """Estadísticas del servicio."""
@@ -515,7 +558,10 @@ class RAGService:
         except Exception:
             vector_stats = {'total_vectors': 0}
         
-        model_info = self.llm.get_model_info()
+        try:
+            model_info = self.llm.get_model_info()
+        except Exception:
+            model_info = {'current_model': 'unknown', 'model_type': 'unknown'}
         
         return {
             'repository': {

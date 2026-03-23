@@ -1,0 +1,7 @@
+    Utiliza esta herramienta siempre que el usuario solicite un resumen estadístico completo
+    y descriptivo de la base de datos, incluyendo varias estadísticas (promedio, desvío típico, 
+    mínimo, máximo, etc.).
+    """
+    resumen = df.describe(include='number').transpose().to_string()
+    plantilla_respuesta = PromptTemplate(
+        template = """

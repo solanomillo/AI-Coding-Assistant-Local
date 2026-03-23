@@ -45,11 +45,12 @@ class AgentWorkflow:
         self.review_agent = ReviewAgent()
         self.docs_agent = DocsAgent()
         
-        # Configurar LLM, vector store y embedding service para los agentes
+        # Configurar LLM, vector store, embedding service y cache service
         if rag_service:
             llm = rag_service.llm
             vector_store = rag_service.vector_store
             embedding_service = rag_service.embedding
+            cache_service = rag_service.cache
             repo_context = {
                 'name': rag_service.repo_name,
                 'id': rag_service.repo_id
@@ -59,12 +60,12 @@ class AgentWorkflow:
                 agent.set_llm(llm)
                 agent.set_vector_store(vector_store)
                 agent.set_embedding_service(embedding_service)
+                agent.set_cache_service(cache_service)
                 agent.set_repo_context(repo_context)
         
-        # Construir grafo
+        # Construir grafo        
         self.memory = MemorySaver()
         self.graph = self._build_graph()
-        
         
         logger.info("AgentWorkflow inicializado correctamente")
     

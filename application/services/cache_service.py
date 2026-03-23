@@ -9,6 +9,7 @@ import hashlib
 import pickle
 import time
 import json
+import re
 from pathlib import Path
 from typing import Optional, Dict, Any, List, BinaryIO
 from datetime import datetime, timedelta
@@ -21,13 +22,6 @@ logger = logging.getLogger(__name__)
 class CacheService:
     """
     Servicio de caché LRU para archivos de repositorios.
-    
-    Características:
-    - Almacena solo archivos recientemente usados
-    - Auto-limpieza cuando excede tamaño máximo
-    - Persistencia de metadatos
-    - Thread-safe para operaciones concurrentes
-    - Estadísticas de uso
     """
     
     def __init__(self, cache_dir: str = "data/cache", max_size_mb: int = 500):
@@ -42,7 +36,6 @@ class CacheService:
         self.metadata_dir = self.cache_dir / "metadata"
         self.files_dir = self.cache_dir / "files"
         
-        # Crear directorios
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self.metadata_dir.mkdir(parents=True, exist_ok=True)
         self.files_dir.mkdir(parents=True, exist_ok=True)
@@ -50,26 +43,39 @@ class CacheService:
         self.max_size_bytes = max_size_mb * 1024 * 1024
         self.lock = Lock()
         
-        # Metadatos del caché
         self.metadata = self._load_metadata()
-        self.access_counts = {}  # Contador de accesos para estadísticas
+        self.access_counts = {}
         
         logger.info(f"Servicio de caché inicializado")
         logger.info(f"  Directorio: {self.cache_dir}")
         logger.info(f"  Tamaño máximo: {max_size_mb} MB")
         logger.info(f"  Archivos en caché: {len(self.metadata['files'])}")
     
-    def _load_metadata(self) -> Dict[str, Any]:
+    def _sanitize_chunk_id(self, chunk_id: str) -> str:
         """
-        Carga metadatos del caché desde disco.
+        Sanitiza el ID del fragmento para que sea válido como nombre de archivo.
         
+        Args:
+            chunk_id: ID original (ej: 23:app.py:0)
+            
         Returns:
-            Diccionario con metadatos
+            ID sanitizado válido para sistema de archivos
         """
+        # Reemplazar : con _
+        safe_id = chunk_id.replace(':', '_')
+        # Reemplazar otros caracteres no válidos en Windows
+        safe_id = re.sub(r'[<>:"/\\|?*]', '_', safe_id)
+        # Limitar longitud
+        if len(safe_id) > 200:
+            safe_id = hashlib.md5(safe_id.encode()).hexdigest()
+        return safe_id
+    
+    def _load_metadata(self) -> Dict[str, Any]:
+        """Carga metadatos del caché desde disco."""
         metadata_file = self.metadata_dir / "cache_metadata.json"
         
         default_metadata = {
-            'files': {},  # file_key -> {path, size, last_access, hits, created_at}
+            'files': {},
             'total_size': 0,
             'created_at': datetime.now().isoformat(),
             'last_cleanup': None,
@@ -92,7 +98,6 @@ class CacheService:
         metadata_file = self.metadata_dir / "cache_metadata.json"
         
         try:
-            # Crear backup antes de guardar
             if metadata_file.exists():
                 backup = self.metadata_dir / "cache_metadata.backup.json"
                 shutil.copy2(metadata_file, backup)
@@ -106,30 +111,12 @@ class CacheService:
             logger.error(f"Error guardando metadatos: {e}")
     
     def _get_file_key(self, repo_id: int, file_path: str) -> str:
-        """
-        Genera clave única para un archivo.
-        
-        Args:
-            repo_id: ID del repositorio
-            file_path: Ruta del archivo
-            
-        Returns:
-            Clave única
-        """
+        """Genera clave única para un archivo."""
         unique = f"{repo_id}:{file_path}"
         return hashlib.sha256(unique.encode()).hexdigest()[:16]
     
     def get(self, repo_id: int, file_path: str) -> Optional[Path]:
-        """
-        Obtiene un archivo del caché.
-        
-        Args:
-            repo_id: ID del repositorio
-            file_path: Ruta del archivo
-            
-        Returns:
-            Ruta al archivo en caché o None
-        """
+        """Obtiene un archivo del caché."""
         file_key = self._get_file_key(repo_id, file_path)
         
         with self.lock:
@@ -138,23 +125,18 @@ class CacheService:
                 cached_file = self.files_dir / file_key
                 
                 if cached_file.exists():
-                    # Actualizar metadatos
                     metadata['last_access'] = time.time()
                     metadata['hits'] = metadata.get('hits', 0) + 1
-                    
-                    # Actualizar contador de accesos
                     self.access_counts[file_key] = self.access_counts.get(file_key, 0) + 1
                     
                     logger.debug(f"Cache hit: {file_path} (hits: {metadata['hits']})")
                     
-                    # Guardar metadatos periódicamente (cada 10 accesos)
                     if metadata['hits'] % 10 == 0:
                         self._save_metadata()
                     
                     return cached_file
                 else:
-                    # Archivo perdido, limpiar metadata
-                    logger.warning(f"Archivo en caché no encontrado en disco: {file_key}")
+                    logger.warning(f"Archivo en caché no encontrado: {file_key}")
                     del self.metadata['files'][file_key]
                     self.metadata['total_size'] -= metadata['size']
                     self._save_metadata()
@@ -163,31 +145,18 @@ class CacheService:
         return None
     
     def put(self, repo_id: int, file_path: str, content: bytes) -> Path:
-        """
-        Guarda un archivo en caché.
-        
-        Args:
-            repo_id: ID del repositorio
-            file_path: Ruta original del archivo
-            content: Contenido del archivo
-            
-        Returns:
-            Ruta al archivo en caché
-        """
+        """Guarda un archivo en caché."""
         file_key = self._get_file_key(repo_id, file_path)
         cached_file = self.files_dir / file_key
         file_size = len(content)
         
         with self.lock:
-            # Verificar si ya existe
             if file_key in self.metadata['files']:
                 old_size = self.metadata['files'][file_key]['size']
                 self.metadata['total_size'] -= old_size
             
-            # Guardar archivo
             cached_file.write_bytes(content)
             
-            # Actualizar metadatos
             self.metadata['files'][file_key] = {
                 'path': file_path,
                 'repo_id': repo_id,
@@ -201,27 +170,15 @@ class CacheService:
             
             logger.info(f"Archivo guardado en caché: {file_path} ({file_size} bytes)")
             
-            # Limpiar si excede tamaño máximo
             if self.metadata['total_size'] > self.max_size_bytes:
                 self._cleanup()
             
-            # Guardar metadatos
             self._save_metadata()
         
         return cached_file
     
     def get_text(self, repo_id: int, file_path: str, encoding: str = 'utf-8') -> Optional[str]:
-        """
-        Obtiene contenido de texto de un archivo.
-        
-        Args:
-            repo_id: ID del repositorio
-            file_path: Ruta del archivo
-            encoding: Codificación del archivo
-            
-        Returns:
-            Contenido del archivo o None
-        """
+        """Obtiene contenido de texto de un archivo."""
         cached_file = self.get(repo_id, file_path)
         
         if cached_file:
@@ -233,25 +190,48 @@ class CacheService:
         return None
     
     def put_text(self, repo_id: int, file_path: str, content: str, encoding: str = 'utf-8') -> Path:
+        """Guarda contenido de texto en caché."""
+        return self.put(repo_id, file_path, content.encode(encoding))
+    
+    def get_chunk(self, chunk_id: str) -> Optional[str]:
         """
-        Guarda contenido de texto en caché.
+        Obtiene el contenido de un fragmento por su ID.
         
         Args:
-            repo_id: ID del repositorio
-            file_path: Ruta original del archivo
-            content: Contenido de texto
-            encoding: Codificación
+            chunk_id: ID del fragmento
             
         Returns:
-            Ruta al archivo en caché
+            Contenido del fragmento o None
         """
-        return self.put(repo_id, file_path, content.encode(encoding))
+        try:
+            safe_id = self._sanitize_chunk_id(chunk_id)
+            chunk_file = self.files_dir / safe_id
+            if chunk_file.exists():
+                return chunk_file.read_text(encoding='utf-8')
+        except Exception as e:
+            logger.error(f"Error leyendo fragmento {chunk_id}: {e}")
+        return None
+    
+    def put_chunk(self, chunk_id: str, content: str) -> None:
+        """
+        Guarda un fragmento en caché.
+        
+        Args:
+            chunk_id: ID del fragmento
+            content: Contenido del fragmento
+        """
+        try:
+            safe_id = self._sanitize_chunk_id(chunk_id)
+            chunk_file = self.files_dir / safe_id
+            chunk_file.write_text(content, encoding='utf-8')
+            logger.debug(f"Fragmento guardado: {chunk_id} -> {safe_id} ({len(content)} bytes)")
+        except Exception as e:
+            logger.error(f"Error guardando fragmento {chunk_id}: {e}")
     
     def _cleanup(self) -> None:
         """Limpia archivos antiguos cuando se excede el tamaño máximo."""
         logger.warning(f"Iniciando limpieza de caché. Tamaño actual: {self.metadata['total_size']} bytes")
         
-        # Ordenar archivos por última acceso (más antiguos primero)
         sorted_files = sorted(
             self.metadata['files'].items(),
             key=lambda x: x[1]['last_access']
@@ -265,7 +245,6 @@ class CacheService:
             if bytes_freed >= bytes_to_free:
                 break
             
-            # Eliminar archivo
             cached_file = self.files_dir / file_key
             if cached_file.exists():
                 cached_file.unlink()
@@ -273,25 +252,16 @@ class CacheService:
             bytes_freed += metadata['size']
             del self.metadata['files'][file_key]
             files_removed += 1
-            
-            logger.debug(f"Eliminado: {metadata['path']} ({metadata['size']} bytes)")
         
         self.metadata['total_size'] -= bytes_freed
         self.metadata['last_cleanup'] = time.time()
         self.metadata['cleanup_count'] = self.metadata.get('cleanup_count', 0) + 1
         
         logger.info(f"Limpieza completada: {files_removed} archivos, {bytes_freed} bytes liberados")
-        
-        # Guardar metadatos después de limpieza
         self._save_metadata()
     
     def clear_repository(self, repo_id: int) -> None:
-        """
-        Limpia todos los archivos de un repositorio del caché.
-        
-        Args:
-            repo_id: ID del repositorio
-        """
+        """Limpia todos los archivos de un repositorio del caché."""
         with self.lock:
             to_delete = []
             
@@ -316,11 +286,9 @@ class CacheService:
     def clear_all(self) -> None:
         """Limpia todo el caché."""
         with self.lock:
-            # Eliminar archivos
             shutil.rmtree(self.files_dir)
             self.files_dir.mkdir(parents=True)
             
-            # Reiniciar metadatos
             self.metadata = {
                 'files': {},
                 'total_size': 0,
@@ -330,24 +298,15 @@ class CacheService:
             }
             
             self.access_counts = {}
-            
-            # Guardar
             self._save_metadata()
-            
+        
         logger.info("Caché completamente limpiado")
     
     def get_stats(self) -> Dict[str, Any]:
-        """
-        Obtiene estadísticas del caché.
-        
-        Returns:
-            Diccionario con estadísticas
-        """
+        """Obtiene estadísticas del caché."""
         with self.lock:
-            # Calcular hits totales
             total_hits = sum(f.get('hits', 0) for f in self.metadata['files'].values())
             
-            # Obtener archivos más accedidos
             most_accessed = sorted(
                 [
                     {
@@ -377,23 +336,14 @@ class CacheService:
             }
     
     def prefetch(self, repo_id: int, file_paths: List[str], base_dir: Path) -> None:
-        """
-        Precarga múltiples archivos en caché.
-        
-        Args:
-            repo_id: ID del repositorio
-            file_paths: Lista de rutas de archivos
-            base_dir: Directorio base donde buscar los archivos
-        """
+        """Precarga múltiples archivos en caché."""
         logger.info(f"Precargando {len(file_paths)} archivos en caché")
         
         for file_path in file_paths:
             try:
-                # Verificar si ya está en caché
                 if self.get(repo_id, file_path):
                     continue
                 
-                # Leer archivo
                 full_path = base_dir / file_path
                 if full_path.exists():
                     content = full_path.read_bytes()
@@ -405,15 +355,7 @@ class CacheService:
         logger.info("Precarga completada")
     
     def __contains__(self, key: tuple) -> bool:
-        """
-        Verifica si un archivo está en caché.
-        
-        Args:
-            key: Tupla (repo_id, file_path)
-            
-        Returns:
-            True si está en caché
-        """
+        """Verifica si un archivo está en caché."""
         repo_id, file_path = key
         file_key = self._get_file_key(repo_id, file_path)
         return file_key in self.metadata['files']

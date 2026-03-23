@@ -1,0 +1,9 @@
+Ideal para analistas, científicos de datos y equipos que buscan agilidad e insights rápidos con apoyo de IA.
+""")
+st.markdown("### 📁 Realiza la carga de tu archivo CSV")
+archivo_cargado = st.file_uploader("Selecciona un archivo CSV", type="csv", label_visibility="collapsed")
+if archivo_cargado:
+    df = pd.read_csv(archivo_cargado)
+    st.success("Archivo cargado exitosamente!")
+    st.markdown("### 🔍 Primeras filas de tu conjunto de datos")
+    st.dataframe(df.head())

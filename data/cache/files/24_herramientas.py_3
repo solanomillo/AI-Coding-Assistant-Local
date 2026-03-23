@@ -1,0 +1,10 @@
+                ================= INFORMACIÓN DEL DATAFRAME =================
+                Dimensiones: {shape}
+                Columnas y tipos de datos:
+                {columns}
+                Valores nulos por columna:
+                {nulos}
+                Cadenas 'nan' (en cualquier capitalización) por columna:
+                {nans_str}
+                Filas duplicadas: {duplicados}
+                ============================================================
