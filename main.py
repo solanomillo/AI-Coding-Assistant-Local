@@ -14,7 +14,7 @@ from datetime import datetime
 import os
 from dotenv import load_dotenv
 from application.services.rag_gemini_service import RAGService
-
+from application.graph.workflow import AgentWorkflow
 # Cargar variables de entorno
 load_dotenv()
 
@@ -74,13 +74,7 @@ def setup_project_structure() -> None:
 
 def get_repo_name(repo: Union[Dict[str, Any], Any]) -> str:
     """
-    Obtiene el nombre del repositorio de manera segura, tanto si es objeto como diccionario.
-    
-    Args:
-        repo: Repositorio (objeto o diccionario)
-        
-    Returns:
-        Nombre del repositorio
+    Obtiene el nombre del repositorio de manera segura.
     """
     if isinstance(repo, dict):
         return repo.get('name', 'desconocido')
@@ -91,28 +85,18 @@ def get_repo_name(repo: Union[Dict[str, Any], Any]) -> str:
 def get_repo_file_count(repo: Union[Dict[str, Any], Any]) -> int:
     """
     Obtiene el número de archivos del repositorio de manera segura.
-    
-    Args:
-        repo: Repositorio (objeto o diccionario)
-        
-    Returns:
-        Número de archivos
     """
     if isinstance(repo, dict):
         return repo.get('file_count', 0)
     else:
-        return len(getattr(repo, 'files', [])) if hasattr(repo, 'files') else getattr(repo, 'file_count', 0)
+        if hasattr(repo, 'files'):
+            return len(repo.files)
+        return getattr(repo, 'file_count', 0)
 
 
 def get_repo_total_lines(repo: Union[Dict[str, Any], Any]) -> int:
     """
     Obtiene el total de líneas del repositorio de manera segura.
-    
-    Args:
-        repo: Repositorio (objeto o diccionario)
-        
-    Returns:
-        Total de líneas
     """
     if isinstance(repo, dict):
         return repo.get('total_lines', 0)
@@ -138,6 +122,9 @@ def initialize_session_state() -> None:
     if 'rag_service' not in st.session_state:
         st.session_state.rag_service = None
     
+    if 'agent_workflow' not in st.session_state:
+        st.session_state.agent_workflow = None
+    
     if 'prefer_pro' not in st.session_state:
         prefer_pro = os.getenv("GEMINI_PREFER_PRO", "false").lower() == "true"
         st.session_state.prefer_pro = prefer_pro
@@ -156,6 +143,9 @@ def initialize_session_state() -> None:
     
     if 'messages' not in st.session_state:
         st.session_state.messages = []
+    
+    if 'selected_agent' not in st.session_state:
+        st.session_state.selected_agent = "auto"
 
 
 def show_welcome_page() -> None:
@@ -165,7 +155,6 @@ def show_welcome_page() -> None:
     st.title("🤖 AI Coding Assistant Local")
     st.markdown("---")
     
-    # Columnas de características
     col1, col2, col3 = st.columns(3)
     
     with col1:
@@ -188,12 +177,12 @@ def show_welcome_page() -> None:
         """)
     
     with col3:
-        st.info("🤖 **Agentes IA (Próximamente)**")
+        st.info("🤖 **Agentes IA con LangGraph**")
         st.markdown("""
-        - Explicación de código
-        - Code review automático
-        - Generación de documentación
-        - **Próximamente** con LangGraph
+        - **Explicar código**: Funciones, clases, algoritmos
+        - **Revisar código**: Bugs, mejoras, optimizaciones
+        - **Documentar**: Generación automática de documentación
+        - **Router inteligente**: Clasifica y dirige consultas
         """)
     
     st.markdown("---")
@@ -246,12 +235,15 @@ def show_welcome_page() -> None:
                                         include_docs=st.session_state.include_docs
                                     )
                                     
-                                    # Guardar como diccionario para consistencia
                                     st.session_state.rag_service = rag_service
                                     st.session_state.current_repo = repo
                                     st.session_state.repository_loaded = True
                                     st.session_state.messages = []
+                                    
+                                    # Inicializar agentes
+                                    st.session_state.agent_workflow = AgentWorkflow(rag_service)
                                     st.success(f"✅ Repositorio {repo['name']} cargado")
+                                    st.success("🤖 Agentes LangGraph inicializados")
                                     st.rerun()
                                 except Exception as e:
                                     st.error(f"❌ Error: {str(e)}")
@@ -264,7 +256,7 @@ def show_welcome_page() -> None:
     
     # Información del sistema
     with st.expander("📊 Información del Sistema", expanded=False):
-        # Mostrar estadísticas del caché
+        # Estadísticas del caché
         try:
             cache_stats = st.session_state.repo_service.cache.get_stats()
             col1, col2, col3 = st.columns(3)
@@ -289,6 +281,13 @@ def show_welcome_page() -> None:
         st.markdown("- Dimensión: 3072")
         st.markdown("- Fragmentos por archivo: 10")
         st.markdown("- Tamaño de fragmento: 500 caracteres")
+        
+        # Agentes disponibles
+        st.markdown("**🤖 Agentes disponibles:**")
+        st.markdown("- **Router Agent**: Clasifica y dirige consultas")
+        st.markdown("- **Explain Agent**: Explica funciones y clases")
+        st.markdown("- **Review Agent**: Revisa código y sugiere mejoras")
+        st.markdown("- **Docs Agent**: Genera documentación automática")
         
         # Estado de API
         api_key = os.getenv("GEMINI_API_KEY")
@@ -329,7 +328,7 @@ def main() -> NoReturn:
         st.subheader("📋 Navegación")
         page = st.radio(
             "Ir a:",
-            ["🏠 Inicio", "📤 Cargar Repositorio", "📊 Analizar", "💬 Chat", "📚 Repositorios", "⚙️ Configuración"],
+            ["🏠 Inicio", "📤 Cargar Repositorio", "📊 Analizar", "💬 Chat con Agentes", "📚 Repositorios", "⚙️ Configuración"],
             label_visibility="collapsed"
         )
         
@@ -339,10 +338,9 @@ def main() -> NoReturn:
         st.subheader("📊 Estado")
         
         if 'current_repo' in st.session_state and st.session_state.current_repo:
-            repo = st.session_state.current_repo
-            repo_name = get_repo_name(repo)
-            repo_files = get_repo_file_count(repo)
-            repo_lines = get_repo_total_lines(repo)
+            repo_name = get_repo_name(st.session_state.current_repo)
+            repo_files = get_repo_file_count(st.session_state.current_repo)
+            repo_lines = get_repo_total_lines(st.session_state.current_repo)
             
             st.success(f"✅ **Activo:** {repo_name}")
             
@@ -352,22 +350,18 @@ def main() -> NoReturn:
             with col2:
                 st.metric("📊 Líneas", repo_lines)
             
-            # Mostrar modelo activo si RAG está disponible
-            if 'rag_service' in st.session_state and st.session_state.rag_service:
-                try:
-                    stats = st.session_state.rag_service.get_stats()
-                    model_type = stats['llm']['model_type']
-                    model_emoji = "⭐ PRO" if model_type == 'pro' else "⚡ FLASH"
-                    st.info(f"🤖 Modelo: {model_emoji}")
-                    st.caption(f"Dimensión: {stats['embedding_dimension']}")
-                except Exception as e:
-                    logger.debug(f"Error obteniendo estadísticas: {e}")
+            # Mostrar estado de agentes
+            if 'agent_workflow' in st.session_state and st.session_state.agent_workflow:
+                st.info("🤖 Agentes: Activos")
+                st.caption("Router | Explain | Review | Docs")
+            else:
+                st.warning("🤖 Agentes: No inicializados")
         else:
             st.warning("⏳ **Sin repositorio activo**")
         
         st.markdown("---")
         st.caption("v1.0.0 | Gemini + FAISS")
-        st.caption("Multi-lenguaje | Optimizado free tier")
+        st.caption("Multi-lenguaje | Agentes LangGraph")
         st.caption("Dimensión embeddings: 3072")
     
     # Mostrar página seleccionada
@@ -382,7 +376,7 @@ def main() -> NoReturn:
         from interface.streamlit.app import show_analysis_section
         show_analysis_section()
     
-    elif page == "💬 Chat":
+    elif page == "💬 Chat con Agentes":
         from interface.streamlit.app import show_chat_section
         show_chat_section()
     

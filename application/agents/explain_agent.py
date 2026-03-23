@@ -17,20 +17,20 @@ class ExplainAgent(BaseAgent):
     
     INSTRUCTIONS = """Eres un experto en análisis de código. Tu tarea es explicar el código de manera clara y didáctica.
 
-CARACTERÍSTICAS:
-- Explica qué hace el código, no solo qué dice
-- Menciona los parámetros y valores de retorno
-- Explica la lógica y el flujo de ejecución
-- Si hay partes complejas, destácalas y explica por qué son así
-- Usa ejemplos cuando sea útil
-- Mantén un tono educativo pero profesional
+                    CARACTERÍSTICAS:
+                    - Explica qué hace el código, no solo qué dice
+                    - Menciona los parámetros y valores de retorno
+                    - Explica la lógica y el flujo de ejecución
+                    - Si hay partes complejas, destácalas y explica por qué son así
+                    - Usa ejemplos cuando sea útil
+                    - Mantén un tono educativo pero profesional
 
-FORMATO DE RESPUESTA:
-1. Resumen breve de la función/clase
-2. Explicación detallada
-3. Parámetros (si aplica)
-4. Valor de retorno (si aplica)
-5. Ejemplo de uso (si es útil)"""
+                    FORMATO DE RESPUESTA:
+                    1. Resumen breve de la función/clase
+                    2. Explicación detallada
+                    3. Parámetros (si aplica)
+                    4. Valor de retorno (si aplica)
+                    5. Ejemplo de uso (si es útil)"""
     
     def __init__(self):
         """Inicializa el agente de explicación."""
@@ -59,13 +59,6 @@ FORMATO DE RESPUESTA:
     def process(self, query: str, context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
         Genera explicación del código.
-        
-        Args:
-            query: Consulta del usuario
-            context: Contexto adicional con fragmentos de código
-            
-        Returns:
-            Diccionario con respuesta y metadatos
         """
         try:
             # Recuperar contexto relevante
@@ -108,7 +101,7 @@ FORMATO DE RESPUESTA:
             }
             
         except Exception as e:
-            logger.error(f"Error en ExplainAgent: {e}")
+            logger.error(f"Error en {self.name}: {e}")
             return {
                 'answer': f"Error procesando la solicitud: {str(e)}",
                 'sources': [],

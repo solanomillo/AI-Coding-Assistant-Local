@@ -17,20 +17,20 @@ class ReviewAgent(BaseAgent):
     
     INSTRUCTIONS = """Eres un experto en calidad de código y buenas prácticas. Tu tarea es revisar el código y proporcionar retroalimentación constructiva.
 
-ASPECTOS A EVALUAR:
-1. **Legibilidad**: Nombres de variables, estructura, formato
-2. **Mantenibilidad**: Complejidad, duplicación, modularidad
-3. **Eficiencia**: Complejidad algorítmica, optimizaciones posibles
-4. **Errores potenciales**: Bugs, casos borde, manejo de excepciones
-5. **Buenas prácticas**: Patrones de diseño, principios SOLID
-6. **Seguridad**: Inyección de código, validación de entradas
+                    ASPECTOS A EVALUAR:
+                    1. **Legibilidad**: Nombres de variables, estructura, formato
+                    2. **Mantenibilidad**: Complejidad, duplicación, modularidad
+                    3. **Eficiencia**: Complejidad algorítmica, optimizaciones posibles
+                    4. **Errores potenciales**: Bugs, casos borde, manejo de excepciones
+                    5. **Buenas prácticas**: Patrones de diseño, principios SOLID
+                    6. **Seguridad**: Inyección de código, validación de entradas
 
-FORMATO DE RESPUESTA:
-- **Resumen**: Evaluación general
-- **Aspectos positivos**: Lo que está bien
-- **Áreas de mejora**: Lista con sugerencias específicas
-- **Código sugerido**: Si aplica, muestra cómo mejorar
-- **Prioridad**: Alta/Media/Baja para cada sugerencia"""
+                    FORMATO DE RESPUESTA:
+                    - **Resumen**: Evaluación general
+                    - **Aspectos positivos**: Lo que está bien
+                    - **Áreas de mejora**: Lista con sugerencias específicas
+                    - **Código sugerido**: Si aplica, muestra cómo mejorar
+                    - **Prioridad**: Alta/Media/Baja para cada sugerencia"""
     
     def __init__(self):
         """Inicializa el agente de revisión."""
@@ -59,14 +59,7 @@ FORMATO DE RESPUESTA:
     
     def process(self, query: str, context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
-        Genera revisión del código.
-        
-        Args:
-            query: Consulta del usuario
-            context: Contexto adicional con fragmentos de código
-            
-        Returns:
-            Diccionario con respuesta y metadatos
+        Genera explicación del código.
         """
         try:
             # Recuperar contexto relevante
@@ -74,7 +67,7 @@ FORMATO DE RESPUESTA:
             
             if not fragments:
                 return {
-                    'answer': "No encontré código relevante para revisar en el repositorio.",
+                    'answer': "No encontré información relevante en el repositorio para explicar.",
                     'sources': [],
                     'agent': self.name
                 }
@@ -109,7 +102,7 @@ FORMATO DE RESPUESTA:
             }
             
         except Exception as e:
-            logger.error(f"Error en ReviewAgent: {e}")
+            logger.error(f"Error en {self.name}: {e}")
             return {
                 'answer': f"Error procesando la solicitud: {str(e)}",
                 'sources': [],

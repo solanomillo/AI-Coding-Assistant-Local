@@ -7,6 +7,9 @@ import re
 from typing import Dict, Any, Optional
 
 from application.agents.base_agent import BaseAgent
+from application.agents.explain_agent import ExplainAgent
+from application.agents.review_agent import ReviewAgent
+from application.agents.docs_agent import DocsAgent
 
 logger = logging.getLogger(__name__)
 
@@ -124,9 +127,7 @@ class RouterAgent(BaseAgent):
         Returns:
             Instancia del agente correspondiente
         """
-        from application.agents.explain_agent import ExplainAgent
-        from application.agents.review_agent import ReviewAgent
-        from application.agents.docs_agent import DocsAgent
+       
         
         agents = {
             'explain': ExplainAgent,

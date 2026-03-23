@@ -14,9 +14,6 @@ logger = logging.getLogger(__name__)
 class BaseAgent(ABC):
     """
     Clase base abstracta para todos los agentes.
-    
-    Cada agente especializado debe heredar de esta clase
-    e implementar sus métodos específicos.
     """
     
     def __init__(self, name: str, description: str):
@@ -32,6 +29,7 @@ class BaseAgent(ABC):
         self.llm = None
         self.vector_store = None
         self.repo_context = None
+        self.embedding_service = None
         logger.info(f"Agente '{name}' inicializado: {description}")
     
     def set_llm(self, llm) -> None:
@@ -53,6 +51,16 @@ class BaseAgent(ABC):
         """
         self.vector_store = vector_store
         logger.debug(f"Vector store configurado para agente {self.name}")
+    
+    def set_embedding_service(self, embedding_service) -> None:
+        """
+        Establece el servicio de embeddings.
+        
+        Args:
+            embedding_service: Servicio de embeddings
+        """
+        self.embedding_service = embedding_service
+        logger.debug(f"Embedding service configurado para agente {self.name}")
     
     def set_repo_context(self, repo_context: Dict[str, Any]) -> None:
         """
@@ -106,10 +114,27 @@ class BaseAgent(ABC):
             logger.warning(f"Vector store no disponible para agente {self.name}")
             return []
         
+        if not self.embedding_service:
+            logger.warning(f"Embedding service no disponible para agente {self.name}")
+            return []
+        
         try:
-            results = self.vector_store.search(query, k=k)
+            # CORRECCIÓN: Generar embedding de la consulta
+            logger.debug(f"Generando embedding para consulta: {query[:50]}...")
+            query_vector = self.embedding_service.generate_embedding(query)
+            
+            # Verificar dimensión
+            if len(query_vector) != self.embedding_service.get_dimension():
+                logger.error(f"Dimensión incorrecta: {len(query_vector)}")
+                return []
+            
+            logger.debug(f"Embedding generado: {len(query_vector)} dimensiones")
+            
+            # Buscar en FAISS
+            results = self.vector_store.search(query_vector, k=k)
             logger.debug(f"Recuperados {len(results)} fragmentos para {self.name}")
             return results
+            
         except Exception as e:
             logger.error(f"Error recuperando contexto: {e}")
             return []
@@ -132,17 +157,17 @@ class BaseAgent(ABC):
         
         return f"""{instructions}
 
-                {repo_info}
-                CONTEXTO DEL CÓDIGO:
-                {context}
+                    {repo_info}
+                    CONTEXTO DEL CÓDIGO:
+                    {context}
 
-                CONSULTA DEL USUARIO:
-                {query}
+                    CONSULTA DEL USUARIO:
+                    {query}
 
-                INSTRUCCIONES ADICIONALES:
-                - Sé técnico y preciso
-                - Usa formato de código con ``` cuando sea necesario
-                - Responde en español
-                - Si no hay suficiente información, indícalo claramente
+                    INSTRUCCIONES ADICIONALES:
+                    - Sé técnico y preciso
+                    - Usa formato de código con ``` cuando sea necesario
+                    - Responde en español
+                    - Si no hay suficiente información, indícalo claramente
 
-                RESPUESTA:"""
+                    RESPUESTA:"""

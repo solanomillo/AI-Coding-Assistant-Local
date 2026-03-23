@@ -1,15 +1,14 @@
 """
 Orquestación de agentes usando LangGraph.
-Define el flujo de trabajo para procesar consultas.
 """
 
 import logging
-from typing import Dict, Any, Optional, TypedDict, Annotated
+from typing import Dict, Any, Optional, TypedDict
 from langgraph.graph import StateGraph, END
-from langgraph.checkpoint import MemorySaver
+from langgraph.checkpoint.memory import MemorySaver
 
 from application.agents import RouterAgent, ExplainAgent, ReviewAgent, DocsAgent
-from application.services.rag_gemini_service import RAGGeminiService
+from application.services.rag_gemini_service import RAGService
 
 logger = logging.getLogger(__name__)
 
@@ -29,14 +28,9 @@ class AgentState(TypedDict):
 class AgentWorkflow:
     """
     Orquestador de agentes usando LangGraph.
-    
-    Define el flujo:
-    1. Router clasifica la consulta
-    2. Se dirige al agente especializado
-    3. El agente procesa y genera respuesta
     """
     
-    def __init__(self, rag_service: Optional[RAGGeminiService] = None):
+    def __init__(self, rag_service: Optional[RAGService] = None):
         """
         Inicializa el flujo de trabajo.
         
@@ -51,10 +45,11 @@ class AgentWorkflow:
         self.review_agent = ReviewAgent()
         self.docs_agent = DocsAgent()
         
-        # Configurar LLM y vector store para los agentes
+        # Configurar LLM, vector store y embedding service para los agentes
         if rag_service:
             llm = rag_service.llm
             vector_store = rag_service.vector_store
+            embedding_service = rag_service.embedding
             repo_context = {
                 'name': rag_service.repo_name,
                 'id': rag_service.repo_id
@@ -63,11 +58,13 @@ class AgentWorkflow:
             for agent in [self.explain_agent, self.review_agent, self.docs_agent]:
                 agent.set_llm(llm)
                 agent.set_vector_store(vector_store)
+                agent.set_embedding_service(embedding_service)
                 agent.set_repo_context(repo_context)
         
         # Construir grafo
-        self.graph = self._build_graph()
         self.memory = MemorySaver()
+        self.graph = self._build_graph()
+        
         
         logger.info("AgentWorkflow inicializado correctamente")
     
@@ -78,17 +75,14 @@ class AgentWorkflow:
         Returns:
             StateGraph configurado
         """
-        # Crear grafo
         workflow = StateGraph(AgentState)
         
-        # Definir nodos
         workflow.add_node("router", self._router_node)
         workflow.add_node("explain", self._explain_node)
         workflow.add_node("review", self._review_node)
         workflow.add_node("docs", self._docs_node)
         workflow.add_node("general", self._general_node)
         
-        # Definir flujo
         workflow.set_entry_point("router")
         
         workflow.add_conditional_edges(
@@ -102,7 +96,6 @@ class AgentWorkflow:
             }
         )
         
-        # Todos los agentes terminan
         workflow.add_edge("explain", END)
         workflow.add_edge("review", END)
         workflow.add_edge("docs", END)
@@ -111,17 +104,8 @@ class AgentWorkflow:
         return workflow.compile(checkpointer=self.memory)
     
     def _router_node(self, state: AgentState) -> AgentState:
-        """
-        Nodo del router: clasifica la consulta.
-        
-        Args:
-            state: Estado actual
-            
-        Returns:
-            Estado actualizado
-        """
+        """Nodo del router."""
         result = self.router.process(state['query'])
-        
         return {
             **state,
             'query_type': result['type'],
@@ -129,67 +113,27 @@ class AgentWorkflow:
         }
     
     def _route_to_agent(self, state: AgentState) -> str:
-        """
-        Determina qué agente usar según el tipo de consulta.
-        
-        Args:
-            state: Estado actual
-            
-        Returns:
-            Nombre del nodo destino
-        """
+        """Determina qué agente usar."""
         query_type = state.get('query_type', 'general')
         return query_type
     
     def _explain_node(self, state: AgentState) -> AgentState:
-        """
-        Nodo del agente de explicación.
-        
-        Args:
-            state: Estado actual
-            
-        Returns:
-            Estado con respuesta
-        """
+        """Nodo del agente de explicación."""
         result = self.explain_agent.process(state['query'])
         return {**state, 'response': result, 'sources': result.get('sources', [])}
     
     def _review_node(self, state: AgentState) -> AgentState:
-        """
-        Nodo del agente de revisión.
-        
-        Args:
-            state: Estado actual
-            
-        Returns:
-            Estado con respuesta
-        """
+        """Nodo del agente de revisión."""
         result = self.review_agent.process(state['query'])
         return {**state, 'response': result, 'sources': result.get('sources', [])}
     
     def _docs_node(self, state: AgentState) -> AgentState:
-        """
-        Nodo del agente de documentación.
-        
-        Args:
-            state: Estado actual
-            
-        Returns:
-            Estado con respuesta
-        """
+        """Nodo del agente de documentación."""
         result = self.docs_agent.process(state['query'])
         return {**state, 'response': result, 'sources': result.get('sources', [])}
     
     def _general_node(self, state: AgentState) -> AgentState:
-        """
-        Nodo para consultas generales (usa RAG directamente).
-        
-        Args:
-            state: Estado actual
-            
-        Returns:
-            Estado con respuesta
-        """
+        """Nodo para consultas generales."""
         if self.rag_service:
             result = self.rag_service.query(state['query'], include_sources=True)
             return {
@@ -205,7 +149,7 @@ class AgentWorkflow:
             return {
                 **state,
                 'response': {
-                    'answer': "No hay servicio RAG disponible para consultas generales.",
+                    'answer': "No hay servicio RAG disponible.",
                     'sources': [],
                     'agent': 'general'
                 }
@@ -224,7 +168,6 @@ class AgentWorkflow:
         try:
             logger.info(f"Procesando consulta con agentes: {query[:100]}...")
             
-            # Estado inicial
             initial_state: AgentState = {
                 'query': query,
                 'query_type': '',
@@ -234,7 +177,6 @@ class AgentWorkflow:
                 'sources': []
             }
             
-            # Ejecutar grafo
             config = {"configurable": {"thread_id": "1"}}
             final_state = self.graph.invoke(initial_state, config)
             

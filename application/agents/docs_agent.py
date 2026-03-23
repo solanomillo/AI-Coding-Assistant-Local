@@ -61,14 +61,7 @@ FORMATO DE RESPUESTA:
     
     def process(self, query: str, context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
-        Genera documentación del código.
-        
-        Args:
-            query: Consulta del usuario
-            context: Contexto adicional con fragmentos de código
-            
-        Returns:
-            Diccionario con respuesta y metadatos
+        Genera explicación del código.
         """
         try:
             # Recuperar contexto relevante
@@ -76,7 +69,7 @@ FORMATO DE RESPUESTA:
             
             if not fragments:
                 return {
-                    'answer': "No encontré código para documentar en el repositorio.",
+                    'answer': "No encontré información relevante en el repositorio para explicar.",
                     'sources': [],
                     'agent': self.name
                 }
@@ -111,7 +104,7 @@ FORMATO DE RESPUESTA:
             }
             
         except Exception as e:
-            logger.error(f"Error en DocsAgent: {e}")
+            logger.error(f"Error en {self.name}: {e}")
             return {
                 'answer': f"Error procesando la solicitud: {str(e)}",
                 'sources': [],

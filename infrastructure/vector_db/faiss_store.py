@@ -20,24 +20,39 @@ logger = logging.getLogger(__name__)
 class FAISSStore:
     """
     Almacén vectorial usando FAISS.
+    
+    Características:
+    - Índice plano (exacto) para búsqueda precisa
+    - Persistencia en disco
+    - Metadatos asociados a vectores
     """
     
-    def __init__(self, dimension: int = 768, index_path: Optional[Path] = None):
+    def __init__(self, dimension: int = 3072, index_path: Optional[Path] = None):
         """
         Inicializa el almacén FAISS.
+        
+        Args:
+            dimension: Dimensión de los vectores (3072 para Gemini)
+            index_path: Ruta para persistencia
         """
         self.dimension = dimension
         self.index_path = Path(index_path) if index_path else Path("data/vector_store/faiss.index")
         self.metadata_path = self.index_path.with_suffix('.pkl')
         
+        # Crear directorio si no existe
         self.index_path.parent.mkdir(parents=True, exist_ok=True)
         
+        # Inicializar o cargar índice
         self.index = self._load_or_create_index()
+        
+        # Metadatos (id -> metadata)
         self.metadata = self._load_metadata()
         
+        # Mapeo inverso (id -> posición en índice)
         self.id_to_position = {}
         self.position_to_id = []
         
+        # Reconstruir mapeos si hay datos
         self._rebuild_mappings()
         
         logger.info(f"FAISSStore inicializado: {len(self.metadata)} vectores, dimensión {dimension}")
@@ -52,6 +67,7 @@ class FAISSStore:
         except Exception as e:
             logger.warning(f"Error cargando índice: {e}")
         
+        # Crear índice plano (búsqueda exacta)
         index = faiss.IndexFlatIP(self.dimension)
         logger.info(f"Índice nuevo creado (dimensión: {self.dimension})")
         return index
@@ -87,7 +103,6 @@ class FAISSStore:
             position = data.get('position')
             if position is not None:
                 self.id_to_position[vec_id] = position
-                # Asegurar que position_to_id tenga el tamaño adecuado
                 while len(self.position_to_id) <= position:
                     self.position_to_id.append(None)
                 self.position_to_id[position] = vec_id
@@ -103,15 +118,12 @@ class FAISSStore:
         """
         Añade vectores al índice.
         """
-        # Validaciones iniciales
         if not vectors:
             logger.warning("No hay vectores para añadir")
             return
         
         if len(vectors) != len(ids) or len(vectors) != len(metadatas):
             raise ValueError(f"Longitudes inconsistentes: vectors={len(vectors)}, ids={len(ids)}, metadatas={len(metadatas)}")
-        
-        logger.info(f"Preparando {len(vectors)} vectores para añadir...")
         
         try:
             # Verificar cada vector tiene la dimensión correcta
@@ -133,7 +145,7 @@ class FAISSStore:
             
             # Añadir vectores
             self.index.add(vectors_np)
-            logger.debug(f"Vectores añadidos al índice")
+            logger.debug("Vectores añadidos al índice")
             
             # Guardar metadatos y mapeos
             for i, (vec_id, metadata) in enumerate(zip(ids, metadatas)):
@@ -144,7 +156,6 @@ class FAISSStore:
                 }
                 self.id_to_position[vec_id] = position
                 
-                # Asegurar que position_to_id tenga el tamaño adecuado
                 while len(self.position_to_id) <= position:
                     self.position_to_id.append(None)
                 self.position_to_id[position] = vec_id
@@ -155,7 +166,7 @@ class FAISSStore:
             # Guardar índice
             faiss.write_index(self.index, str(self.index_path))
             
-            logger.info(f"✅ Añadidos {len(vectors)} vectores. Total en índice: {self.index.ntotal}")
+            logger.info(f"Añadidos {len(vectors)} vectores. Total en índice: {self.index.ntotal}")
             
         except Exception as e:
             logger.error(f"Error añadiendo vectores: {e}")
@@ -178,7 +189,8 @@ class FAISSStore:
         try:
             # Validar dimensión del query
             if len(query_vector) != self.dimension:
-                raise ValueError(f"Query vector dimensión {len(query_vector)} != {self.dimension}")
+                logger.error(f"Query vector dimensión {len(query_vector)} != {self.dimension}")
+                return []
             
             # Preparar query
             query_np = np.array([query_vector], dtype=np.float32)
