@@ -5,7 +5,7 @@ Orquestación de agentes usando LangGraph.
 import logging
 from typing import Dict, Any, Optional, TypedDict
 from langgraph.graph import StateGraph, END
-from langgraph.checkpoint import MemorySaver
+from langgraph.checkpoint.memory import MemorySaver
 
 from application.agents import RouterAgent, ExplainAgent, ReviewAgent, DocsAgent
 from application.services.rag_gemini_service import RAGService
@@ -30,12 +30,9 @@ class AgentWorkflow:
     Orquestador de agentes usando LangGraph.
     """
     
-    def __init__(self, rag_service: Optional[RAGService] = None):
+    def __init__(self, rag_service: Optional[RAGGeminiService] = None):
         """
         Inicializa el flujo de trabajo.
-        
-        Args:
-            rag_service: Servicio RAG para contexto
         """
         self.rag_service = rag_service
         
@@ -51,6 +48,7 @@ class AgentWorkflow:
             vector_store = rag_service.vector_store
             embedding_service = rag_service.embedding
             cache_service = rag_service.cache
+            repo_path = rag_service.repo_path
             repo_context = {
                 'name': rag_service.repo_name,
                 'id': rag_service.repo_id
@@ -61,11 +59,12 @@ class AgentWorkflow:
                 agent.set_vector_store(vector_store)
                 agent.set_embedding_service(embedding_service)
                 agent.set_cache_service(cache_service)
+                agent.set_repo_path(repo_path)
                 agent.set_repo_context(repo_context)
         
-        # Construir grafo
-        self.graph = self._build_graph()
         self.memory = MemorySaver()
+        self.graph = self._build_graph()
+        
         
         logger.info("AgentWorkflow inicializado correctamente")
     
