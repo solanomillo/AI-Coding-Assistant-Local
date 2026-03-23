@@ -22,10 +22,19 @@ build/
 *.swo
 *~
 
-# Proyecto
+# Variables sensibles
 .env
+.env.*
+
+# Proyecto (repositorios controlados)
 data/repositories/*
 !data/repositories/.gitkeep
+
+# 🚨 CACHE Y EMBEDDINGS (CLAVE PARA TI)
+data/cache/
+*.faiss
+*.pkl
+*.pickle
 
 # Streamlit
 .streamlit/secrets.toml
@@ -38,11 +47,11 @@ data/repositories/*
 *.log
 logs/
 
-# OS
-.DS_Store
-Thumbs.db
-
 # Testing
 .pytest_cache/
 .coverage
 htmlcov/
+
+# OS
+.DS_Store
+Thumbs.db
