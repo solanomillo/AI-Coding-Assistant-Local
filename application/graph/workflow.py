@@ -5,7 +5,7 @@ Orquestación de agentes usando LangGraph.
 import logging
 from typing import Dict, Any, Optional, TypedDict
 from langgraph.graph import StateGraph, END
-from langgraph.checkpoint.memory import MemorySaver
+from langgraph.checkpoint import MemorySaver
 
 from application.agents import RouterAgent, ExplainAgent, ReviewAgent, DocsAgent
 from application.services.rag_gemini_service import RAGService
@@ -45,7 +45,7 @@ class AgentWorkflow:
         self.review_agent = ReviewAgent()
         self.docs_agent = DocsAgent()
         
-        # Configurar LLM, vector store, embedding service y cache service
+        # Configurar servicios para los agentes
         if rag_service:
             llm = rag_service.llm
             vector_store = rag_service.vector_store
@@ -63,18 +63,15 @@ class AgentWorkflow:
                 agent.set_cache_service(cache_service)
                 agent.set_repo_context(repo_context)
         
-        # Construir grafo        
-        self.memory = MemorySaver()
+        # Construir grafo
         self.graph = self._build_graph()
+        self.memory = MemorySaver()
         
         logger.info("AgentWorkflow inicializado correctamente")
     
     def _build_graph(self) -> StateGraph:
         """
         Construye el grafo de agentes.
-        
-        Returns:
-            StateGraph configurado
         """
         workflow = StateGraph(AgentState)
         
@@ -141,7 +138,7 @@ class AgentWorkflow:
                 **state,
                 'response': {
                     'answer': result['answer'],
-                    'sources': result['sources'],
+                    'sources': result.get('sources', []),
                     'agent': 'RAGService'
                 },
                 'sources': result.get('sources', [])
@@ -195,12 +192,7 @@ class AgentWorkflow:
             }
     
     def get_available_agents(self) -> Dict[str, str]:
-        """
-        Obtiene información de los agentes disponibles.
-        
-        Returns:
-            Diccionario con nombres y descripciones
-        """
+        """Obtiene información de los agentes disponibles."""
         return {
             'router': self.router.description,
             'explain': self.explain_agent.description,

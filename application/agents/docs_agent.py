@@ -17,23 +17,23 @@ class DocsAgent(BaseAgent):
     
     INSTRUCTIONS = """Eres un experto en documentación técnica. Tu tarea es generar documentación clara y completa del código.
 
-FORMATOS SOPORTADOS:
-- **Docstrings**: Para funciones y clases (formato Google/NumPy)
-- **README**: Documentación de alto nivel del proyecto
-- **Comentarios**: Explicaciones en línea para código complejo
-- **Guías**: Tutoriales y ejemplos de uso
+                    FORMATOS SOPORTADOS:
+                    - **Docstrings**: Para funciones y clases (formato Google/NumPy)
+                    - **README**: Documentación de alto nivel del proyecto
+                    - **Comentarios**: Explicaciones en línea para código complejo
+                    - **Guías**: Tutoriales y ejemplos de uso
 
-CARACTERÍSTICAS DE LA DOCUMENTACIÓN:
-- Explica el propósito del código
-- Documenta parámetros y valores de retorno
-- Menciona excepciones que puede lanzar
-- Incluye ejemplos de uso cuando sea útil
-- Sigue las convenciones del lenguaje (PEP 257 para Python)
+                    CARACTERÍSTICAS DE LA DOCUMENTACIÓN:
+                    - Explica el propósito del código
+                    - Documenta parámetros y valores de retorno
+                    - Menciona excepciones que puede lanzar
+                    - Incluye ejemplos de uso cuando sea útil
+                    - Sigue las convenciones del lenguaje (PEP 257 para Python)
 
-FORMATO DE RESPUESTA:
-1. **Resumen**: Propósito del código documentado
-2. **Documentación generada**: El texto de documentación
-3. **Recomendaciones**: Sugerencias para mejorar la documentación existente"""
+                    FORMATO DE RESPUESTA:
+                    1. **Resumen**: Propósito del código documentado
+                    2. **Documentación generada**: El texto de documentación
+                    3. **Recomendaciones**: Sugerencias para mejorar la documentación existente"""
     
     def __init__(self):
         """Inicializa el agente de documentación."""
@@ -45,23 +45,17 @@ FORMATO DE RESPUESTA:
     def can_handle(self, query: str) -> bool:
         """
         Determina si la consulta es sobre documentación.
-        
-        Args:
-            query: Consulta del usuario
-            
-        Returns:
-            True si es una consulta de documentación
         """
         query_lower = query.lower()
         docs_keywords = [
             'documenta', 'documentación', 'docstring', 'comentario',
-            'genera docs', 'escribe documentación'
+            'genera docs', 'escribe documentación', 'documentar'
         ]
         return any(kw in query_lower for kw in docs_keywords)
     
     def process(self, query: str, context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
-        Genera explicación del código.
+        Genera documentación del código.
         """
         try:
             # Recuperar contexto relevante
@@ -69,7 +63,7 @@ FORMATO DE RESPUESTA:
             
             if not fragments:
                 return {
-                    'answer': "No encontré código relevante en el repositorio para explicar.",
+                    'answer': "No encontré código para documentar en el repositorio.",
                     'sources': [],
                     'agent': self.name
                 }
@@ -86,7 +80,7 @@ FORMATO DE RESPUESTA:
             else:
                 answer = "Error: LLM no configurado"
             
-            # Preparar fuentes (preview del código)
+            # Preparar fuentes
             sources = [
                 {
                     'file': f['file'],
@@ -110,26 +104,3 @@ FORMATO DE RESPUESTA:
                 'sources': [],
                 'agent': self.name
             }
-    
-    def _build_context_text(self, fragments: list) -> str:
-        """
-        Construye texto de contexto a partir de fragmentos.
-        
-        Args:
-            fragments: Lista de fragmentos recuperados
-            
-        Returns:
-            Texto de contexto formateado
-        """
-        context_parts = []
-        for i, f in enumerate(fragments[:5]):
-            metadata = f['metadata']
-            file_path = metadata.get('file', 'desconocido')
-            preview = metadata.get('preview', '')
-            
-            context_parts.append(
-                f"[Código a documentar - Archivo: {file_path}]\n"
-                f"{preview}\n"
-            )
-        
-        return "\n---\n".join(context_parts)

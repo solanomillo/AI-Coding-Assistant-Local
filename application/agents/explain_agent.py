@@ -42,17 +42,11 @@ class ExplainAgent(BaseAgent):
     def can_handle(self, query: str) -> bool:
         """
         Determina si la consulta es sobre explicación de código.
-        
-        Args:
-            query: Consulta del usuario
-            
-        Returns:
-            True si es una consulta de explicación
         """
         query_lower = query.lower()
         explain_keywords = [
             'explica', 'explique', 'qué hace', 'cómo funciona',
-            'para qué sirve', 'describe', 'qué es'
+            'para qué sirve', 'describe', 'qué es', 'paso a paso'
         ]
         return any(kw in query_lower for kw in explain_keywords)
     
@@ -83,7 +77,7 @@ class ExplainAgent(BaseAgent):
             else:
                 answer = "Error: LLM no configurado"
             
-            # Preparar fuentes (preview del código)
+            # Preparar fuentes
             sources = [
                 {
                     'file': f['file'],
@@ -107,26 +101,3 @@ class ExplainAgent(BaseAgent):
                 'sources': [],
                 'agent': self.name
             }
-    
-    def _build_context_text(self, fragments: list) -> str:
-        """
-        Construye texto de contexto a partir de fragmentos.
-        
-        Args:
-            fragments: Lista de fragmentos recuperados
-            
-        Returns:
-            Texto de contexto formateado
-        """
-        context_parts = []
-        for i, f in enumerate(fragments[:5]):
-            metadata = f['metadata']
-            file_path = metadata.get('file', 'desconocido')
-            preview = metadata.get('preview', '')
-            
-            context_parts.append(
-                f"[Fragmento {i+1} - Archivo: {file_path}]\n"
-                f"{preview}\n"
-            )
-        
-        return "\n---\n".join(context_parts)

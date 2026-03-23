@@ -34,67 +34,38 @@ class BaseAgent(ABC):
         logger.info(f"Agente '{name}' inicializado: {description}")
     
     def set_llm(self, llm) -> None:
-        """
-        Establece el cliente LLM para el agente.
-        
-        Args:
-            llm: Cliente LLM (GeminiLLM)
-        """
+        """Establece el cliente LLM para el agente."""
         self.llm = llm
         logger.debug(f"LLM configurado para agente {self.name}")
     
     def set_vector_store(self, vector_store) -> None:
-        """
-        Establece el vector store para búsqueda de contexto.
-        
-        Args:
-            vector_store: Almacén vectorial FAISS
-        """
+        """Establece el vector store para búsqueda de contexto."""
         self.vector_store = vector_store
         logger.debug(f"Vector store configurado para agente {self.name}")
     
     def set_embedding_service(self, embedding_service) -> None:
-        """
-        Establece el servicio de embeddings.
-        
-        Args:
-            embedding_service: Servicio de embeddings
-        """
+        """Establece el servicio de embeddings."""
         self.embedding_service = embedding_service
         logger.debug(f"Embedding service configurado para agente {self.name}")
     
     def set_cache_service(self, cache_service) -> None:
-        """
-        Establece el servicio de caché para recuperar fragmentos completos.
-        
-        Args:
-            cache_service: Servicio de caché
-        """
+        """Establece el servicio de caché para recuperar fragmentos completos."""
         self.cache_service = cache_service
         logger.debug(f"Cache service configurado para agente {self.name}")
     
     def set_repo_context(self, repo_context: Dict[str, Any]) -> None:
-        """
-        Establece el contexto del repositorio.
-        
-        Args:
-            repo_context: Diccionario con información del repositorio
-        """
+        """Establece el contexto del repositorio."""
         self.repo_context = repo_context
         logger.debug(f"Contexto de repositorio configurado para agente {self.name}")
     
     @abstractmethod
     def can_handle(self, query: str) -> bool:
-        """
-        Determina si este agente puede manejar la consulta.
-        """
+        """Determina si este agente puede manejar la consulta."""
         pass
     
     @abstractmethod
     def process(self, query: str, context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        """
-        Procesa la consulta y genera respuesta.
-        """
+        """Procesa la consulta y genera respuesta."""
         pass
     
     def _retrieve_context(self, query: str, k: int = 5) -> List[Dict[str, Any]]:

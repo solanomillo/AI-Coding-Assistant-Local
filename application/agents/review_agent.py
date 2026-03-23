@@ -24,6 +24,7 @@ class ReviewAgent(BaseAgent):
                     4. **Errores potenciales**: Bugs, casos borde, manejo de excepciones
                     5. **Buenas prácticas**: Patrones de diseño, principios SOLID
                     6. **Seguridad**: Inyección de código, validación de entradas
+                    7. **PEP8**: Cumplimiento de estándares de estilo Python
 
                     FORMATO DE RESPUESTA:
                     - **Resumen**: Evaluación general
@@ -42,24 +43,18 @@ class ReviewAgent(BaseAgent):
     def can_handle(self, query: str) -> bool:
         """
         Determina si la consulta es sobre revisión de código.
-        
-        Args:
-            query: Consulta del usuario
-            
-        Returns:
-            True si es una consulta de revisión
         """
         query_lower = query.lower()
         review_keywords = [
             'revisa', 'revisar', 'revisión', 'review', 'mejora',
             'optimiza', 'bug', 'error', 'problema', 'corrige',
-            'código malo', 'refactoriza'
+            'código malo', 'refactoriza', 'pep8', 'estándares'
         ]
         return any(kw in query_lower for kw in review_keywords)
     
     def process(self, query: str, context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
-        Genera explicación del código.
+        Genera revisión del código.
         """
         try:
             # Recuperar contexto relevante
@@ -67,7 +62,7 @@ class ReviewAgent(BaseAgent):
             
             if not fragments:
                 return {
-                    'answer': "No encontré código relevante en el repositorio para explicar.",
+                    'answer': "No encontré código relevante para revisar en el repositorio.",
                     'sources': [],
                     'agent': self.name
                 }
@@ -84,7 +79,7 @@ class ReviewAgent(BaseAgent):
             else:
                 answer = "Error: LLM no configurado"
             
-            # Preparar fuentes (preview del código)
+            # Preparar fuentes
             sources = [
                 {
                     'file': f['file'],
@@ -108,26 +103,3 @@ class ReviewAgent(BaseAgent):
                 'sources': [],
                 'agent': self.name
             }
-    
-    def _build_context_text(self, fragments: list) -> str:
-        """
-        Construye texto de contexto a partir de fragmentos.
-        
-        Args:
-            fragments: Lista de fragmentos recuperados
-            
-        Returns:
-            Texto de contexto formateado
-        """
-        context_parts = []
-        for i, f in enumerate(fragments[:5]):
-            metadata = f['metadata']
-            file_path = metadata.get('file', 'desconocido')
-            preview = metadata.get('preview', '')
-            
-            context_parts.append(
-                f"[Código a revisar - Archivo: {file_path}]\n"
-                f"{preview}\n"
-            )
-        
-        return "\n---\n".join(context_parts)
