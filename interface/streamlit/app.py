@@ -12,9 +12,7 @@ from dotenv import load_dotenv, set_key
 from typing import Union, Dict, Any, List
 
 from application.services.repo_service import RepositoryService
-from application.services.rag_gemini_service import RAGService
-from application.graph.workflow import AgentWorkflow
-from infrastructure.llm_clients.gemini_llm import GeminiLLM
+from application.services.service_factory import ServiceFactory
 
 logger = logging.getLogger(__name__)
 
@@ -66,17 +64,102 @@ def get_repo_name(repo: Union[Dict[str, Any], Any]) -> str:
         return getattr(repo, 'name', 'desconocido')
 
 
+def _setup_services(repo) -> tuple:
+    """
+    Configura los servicios para un repositorio.
+    Retorna (success, rag_service, agent_workflow)
+    
+    Args:
+        repo: Repositorio (objeto con db_id)
+        
+    Returns:
+        Tupla (success, rag_service, agent_workflow)
+    """
+    if not ServiceFactory.is_api_key_valid():
+        return False, None, None
+    
+    rag_service, agent_workflow = ServiceFactory.setup_repository_services(
+        repo=repo,
+        prefer_pro=st.session_state.get('prefer_pro', False),
+        max_file_size_mb=st.session_state.get('max_file_size_mb', 1),
+        include_docs=st.session_state.get('include_docs', False)
+    )
+    
+    if rag_service is None or agent_workflow is None:
+        return False, None, None
+    
+    return True, rag_service, agent_workflow
+
+
+def _show_repository_stats(repo) -> None:
+    """
+    Muestra estadísticas del repositorio.
+    
+    Args:
+        repo: Repositorio (objeto con files)
+    """
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("📄 Archivos", len(repo.files))
+    with col2:
+        total_funcs = sum(len(f.functions) for f in repo.files)
+        st.metric("🔧 Funciones", total_funcs)
+    with col3:
+        total_classes = sum(len(f.classes) for f in repo.files)
+        st.metric("📚 Clases", total_classes)
+
+
+def _show_indexing_stats(stats: Dict[str, Any], columns: int = 4) -> None:
+    """
+    Muestra estadísticas de indexación de forma consistente.
+    
+    Args:
+        stats: Estadísticas del servicio RAG
+        columns: Número de columnas (3 o 4)
+    """
+    if columns == 4:
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            st.metric("🎯 Fragmentos", stats['processing_stats']['chunks_processed'])
+        with col2:
+            st.metric("📞 API Calls", stats['processing_stats']['api_calls'])
+        with col3:
+            st.metric("⚠️ Rate Limits", stats['processing_stats']['rate_limit_hits'])
+        with col4:
+            st.metric("📐 Dimensión", stats['embedding_dimension'])
+    else:
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("🎯 Fragmentos", stats['processing_stats']['chunks_processed'])
+        with col2:
+            st.metric("📞 API Calls", stats['processing_stats']['api_calls'])
+        with col3:
+            st.metric("⚠️ Rate Limits", stats['processing_stats']['rate_limit_hits'])
+
+
 def show_upload_section() -> None:
-    """Sección de carga con filtros de archivos."""
+    """Sección de carga con verificación de duplicados."""
     st.title("📤 Cargar Repositorio")
     
     if 'repo_service' not in st.session_state:
         st.session_state.repo_service = RepositoryService()
     
-    api_key = os.getenv("GEMINI_API_KEY")
-    if not api_key:
-        st.error("⚠️ **API Key no configurada**")
-        st.info("👉 Ve a la pestaña **Configuración** para agregar tu API key")
+    # Verificar API key al inicio
+    if not ServiceFactory.is_api_key_valid():
+        st.error("🔑 **API Key no configurada**")
+        st.info("""
+        Para usar esta aplicación, necesitas configurar tu API key de Gemini.
+        
+        **Pasos:**
+        1. Ve a la pestaña **Configuración** en el menú lateral
+        2. Ingresa tu API key de Google AI Studio
+        3. Haz clic en Guardar
+        
+        **¿No tienes API key?** 
+        - Ve a [makersuite.google.com/app/apikey](https://makersuite.google.com/app/apikey)
+        - Inicia sesión con tu cuenta Google
+        - Crea una nueva API key (es gratuita)
+        """)
         return
     
     with st.expander("⚡ Optimizaciones activas", expanded=False):
@@ -116,82 +199,86 @@ def show_upload_section() -> None:
                 try:
                     repo = st.session_state.repo_service.load_from_zip(tmp_path)
                     
-                    if repo and repo.files:
-                        st.success(f"✅ **Repositorio '{repo.name}' procesado correctamente**")
-                        
-                        col1, col2, col3, col4 = st.columns(4)
-                        with col1:
-                            st.metric("📄 Archivos", len(repo.files))
-                        with col2:
-                            total_funcs = sum(len(f.functions) for f in repo.files)
-                            st.metric("🔧 Funciones", total_funcs)
-                        with col3:
-                            total_classes = sum(len(f.classes) for f in repo.files)
-                            st.metric("📚 Clases", total_classes)
-                        with col4:
-                            st.metric("📊 Líneas", repo.total_lines)
-                        
-                        languages = {}
-                        for file in repo.files:
-                            ext = file.extension
-                            languages[ext] = languages.get(ext, 0) + 1
-                        
-                        if languages:
-                            st.subheader("📊 Distribución por extensión")
-                            cols = st.columns(min(len(languages), 4))
-                            for idx, (ext, count) in enumerate(sorted(languages.items(), key=lambda x: x[1], reverse=True)[:4]):
-                                with cols[idx % 4]:
-                                    st.metric(ext, count)
-                        
-                        with st.spinner("🧠 Indexando con Gemini + FAISS..."):
-                            try:
-                                rag_service = RAGService(
-                                    repo_name=repo.name,
-                                    repo_path=repo.path,
-                                    repo_id=repo.db_id if hasattr(repo, 'db_id') else 0,
-                                    prefer_pro=st.session_state.get('prefer_pro', False),
-                                    max_file_size_mb=st.session_state.get('max_file_size_mb', 1),
-                                    include_docs=st.session_state.get('include_docs', False)
-                                )
+                    if repo:
+                        if hasattr(repo, 'db_id') and repo.db_id:
+                            # Verificar si ya tiene vectores
+                            safe_name = repo.name.replace(' ', '_').replace('/', '_').replace('\\', '_')
+                            index_path = Path(f"data/vectors/{safe_name}.index")
+                            
+                            if index_path.exists():
+                                # Repositorio ya indexado
+                                st.warning("⚠️ **Repositorio ya existente**")
+                                st.info(f"El repositorio '{repo.name}' ya estaba indexado. Se ha cargado desde la base de datos.")
+                                st.info(f"📁 Ruta: {repo.path}")
                                 
-                                if rag_service.index_repository(repo):
-                                    st.success("✅ **Indexación completada**")
+                                _show_repository_stats(repo)
+                                
+                                success, rag_service, agent_workflow = _setup_services(repo)
+                                
+                                if success:
                                     st.session_state.rag_service = rag_service
-                                    st.session_state.repository_loaded = True
+                                    st.session_state.agent_workflow = agent_workflow
                                     st.session_state.current_repo = repo
+                                    st.session_state.repository_loaded = True
                                     st.session_state.messages = []
-                                    st.session_state.daily_limit_reached = rag_service._daily_limit_reached
-                                    
-                                    st.session_state.agent_workflow = AgentWorkflow(rag_service)
-                                    st.success("🤖 **Agentes LangGraph inicializados**")
-                                    
-                                    stats = rag_service.get_stats()
-                                    col1, col2, col3, col4 = st.columns(4)
-                                    with col1:
-                                        st.metric("🎯 Fragmentos", stats['processing_stats']['chunks_processed'])
-                                    with col2:
-                                        st.metric("📞 API Calls", stats['processing_stats']['api_calls'])
-                                    with col3:
-                                        st.metric("⚠️ Rate Limits", stats['processing_stats']['rate_limit_hits'])
-                                    with col4:
-                                        st.metric("📐 Dimensión", stats['embedding_dimension'])
-                                    
-                                    if stats.get('daily_limit_reached', False):
-                                        st.warning("⚠️ **Límite diario de API alcanzado durante indexación**")
-                                        st.info("Las consultas estarán disponibles mañana. El repositorio ha sido indexado parcialmente.")
-                                    
+                                    st.success("✅ Repositorio cargado correctamente desde caché")
                                 else:
-                                    st.error("❌ **Error en indexación**")
-                                    
-                            except Exception as e:
-                                error_msg = str(e).lower()
-                                if 'quota' in error_msg or '429' in error_msg or 'rate limit' in error_msg:
-                                    st.error("⚠️ **Límite de API alcanzado**")
-                                    st.info("Has superado el límite diario de solicitudes. Las consultas estarán disponibles mañana.")
-                                    st.session_state.daily_limit_reached = True
-                                else:
-                                    st.error(f"❌ **Error en Gemini:** {str(e)}")
-                                logger.error(f"Error de indexación: {e}", exc_info=True)
+                                    st.error("❌ **Error al configurar los servicios**")
+                                    st.info("Verifica que tu API key sea válida y que tengas conexión a internet.")
+                            else:
+                                # Repositorio recién guardado en BD pero sin vectores - hay que indexar
+                                st.success(f"✅ **Repositorio '{repo.name}' procesado correctamente**")
+                                
+                                _show_repository_stats(repo)
+                                
+                                with st.spinner("🧠 Indexando con Gemini + FAISS..."):
+                                    try:
+                                        rag_service = ServiceFactory.create_rag_service(
+                                            repo_name=repo.name,
+                                            repo_path=repo.path,
+                                            repo_id=repo.db_id,
+                                            prefer_pro=st.session_state.get('prefer_pro', False),
+                                            max_file_size_mb=st.session_state.get('max_file_size_mb', 1),
+                                            include_docs=st.session_state.get('include_docs', False)
+                                        )
+                                        
+                                        if rag_service is None:
+                                            st.error("❌ **Error al crear el servicio RAG**")
+                                            st.info("Verifica que tu API key sea válida y que tengas conexión a internet.")
+                                            return
+                                        
+                                        if rag_service.index_repository(repo):
+                                            st.success("✅ **Indexación completada**")
+                                            
+                                            success, rag_service, agent_workflow = _setup_services(repo)
+                                            
+                                            if success:
+                                                st.session_state.rag_service = rag_service
+                                                st.session_state.agent_workflow = agent_workflow
+                                                st.session_state.current_repo = repo
+                                                st.session_state.repository_loaded = True
+                                                st.session_state.messages = []
+                                                st.success("🤖 **Agentes LangGraph inicializados**")
+                                            else:
+                                                st.warning("⚠️ **Agentes no inicializados**")
+                                                st.info("Los agentes requieren API key válida. Configúrala en Configuración.")
+                                            
+                                            _show_indexing_stats(rag_service.get_stats(), columns=4)
+                                        else:
+                                            st.error("❌ **Error en indexación**")
+                                            
+                                    except Exception as e:
+                                        error_msg = str(e).lower()
+                                        if 'quota' in error_msg or '429' in error_msg or 'rate limit' in error_msg:
+                                            st.error("⚠️ **Límite de API alcanzado**")
+                                            st.info("Has superado el límite diario de solicitudes. Las consultas estarán disponibles mañana.")
+                                            st.session_state.daily_limit_reached = True
+                                        else:
+                                            st.error(f"❌ **Error en Gemini:** {str(e)}")
+                                            st.info("Verifica tu API key en la pestaña Configuración.")
+                                        logger.error(f"Error de indexación: {e}", exc_info=True)
+                        else:
+                            st.error("❌ **Error: Repositorio sin ID**")
                     else:
                         st.error("❌ **No se encontraron archivos válidos**")
                         
@@ -215,64 +302,84 @@ def show_upload_section() -> None:
                 with st.spinner("📁 Analizando repositorio..."):
                     repo = st.session_state.repo_service.load_from_directory(path)
                     
-                    if repo and repo.files:
-                        st.success(f"✅ **Repositorio '{repo.name}' procesado correctamente**")
-                        
-                        col1, col2, col3, col4 = st.columns(4)
-                        with col1:
-                            st.metric("📄 Archivos", len(repo.files))
-                        with col2:
-                            total_funcs = sum(len(f.functions) for f in repo.files)
-                            st.metric("🔧 Funciones", total_funcs)
-                        with col3:
-                            total_classes = sum(len(f.classes) for f in repo.files)
-                            st.metric("📚 Clases", total_classes)
-                        with col4:
-                            st.metric("📊 Líneas", repo.total_lines)
-                        
-                        with st.spinner("🧠 Indexando con Gemini..."):
-                            try:
-                                rag_service = RAGService(
-                                    repo_name=repo.name,
-                                    repo_path=path,
-                                    repo_id=repo.db_id if hasattr(repo, 'db_id') else 0,
-                                    prefer_pro=st.session_state.get('prefer_pro', False),
-                                    max_file_size_mb=st.session_state.get('max_file_size_mb', 1),
-                                    include_docs=st.session_state.get('include_docs', False)
-                                )
+                    if repo:
+                        if hasattr(repo, 'db_id') and repo.db_id:
+                            # Verificar si ya tiene vectores
+                            safe_name = repo.name.replace(' ', '_').replace('/', '_').replace('\\', '_')
+                            index_path = Path(f"data/vectors/{safe_name}.index")
+                            
+                            if index_path.exists():
+                                # Repositorio ya indexado
+                                st.warning("⚠️ **Repositorio ya existente**")
+                                st.info(f"El repositorio '{repo.name}' ya estaba indexado. Se ha cargado desde la base de datos.")
+                                st.info(f"📁 Ruta: {repo.path}")
                                 
-                                if rag_service.index_repository(repo):
-                                    st.success("✅ **Indexación completada**")
+                                _show_repository_stats(repo)
+                                
+                                success, rag_service, agent_workflow = _setup_services(repo)
+                                
+                                if success:
                                     st.session_state.rag_service = rag_service
-                                    st.session_state.repository_loaded = True
+                                    st.session_state.agent_workflow = agent_workflow
                                     st.session_state.current_repo = repo
+                                    st.session_state.repository_loaded = True
                                     st.session_state.messages = []
-                                    st.session_state.daily_limit_reached = rag_service._daily_limit_reached
-                                    
-                                    st.session_state.agent_workflow = AgentWorkflow(rag_service)
-                                    st.success("🤖 **Agentes LangGraph inicializados**")
-                                    
-                                    stats = rag_service.get_stats()
-                                    col1, col2, col3 = st.columns(3)
-                                    with col1:
-                                        st.metric("🎯 Fragmentos", stats['processing_stats']['chunks_processed'])
-                                    with col2:
-                                        st.metric("📞 API Calls", stats['processing_stats']['api_calls'])
-                                    with col3:
-                                        st.metric("⚠️ Rate Limits", stats['processing_stats']['rate_limit_hits'])
-                                    
-                                    if stats.get('daily_limit_reached', False):
-                                        st.warning("⚠️ **Límite diario de API alcanzado durante indexación**")
+                                    st.success("✅ Repositorio cargado correctamente desde caché")
                                 else:
-                                    st.error("❌ **Error en indexación**")
-                            except Exception as e:
-                                error_msg = str(e).lower()
-                                if 'quota' in error_msg or '429' in error_msg or 'rate limit' in error_msg:
-                                    st.error("⚠️ **Límite de API alcanzado**")
-                                    st.info("Has superado el límite diario de solicitudes. Las consultas estarán disponibles mañana.")
-                                    st.session_state.daily_limit_reached = True
-                                else:
-                                    st.error(f"❌ **Error:** {str(e)}")
+                                    st.error("❌ **Error al configurar los servicios**")
+                                    st.info("Verifica que tu API key sea válida y que tengas conexión a internet.")
+                            else:
+                                # Repositorio recién guardado sin vectores
+                                st.success(f"✅ **Repositorio '{repo.name}' procesado correctamente**")
+                                
+                                _show_repository_stats(repo)
+                                
+                                with st.spinner("🧠 Indexando con Gemini..."):
+                                    try:
+                                        rag_service = ServiceFactory.create_rag_service(
+                                            repo_name=repo.name,
+                                            repo_path=path,
+                                            repo_id=repo.db_id,
+                                            prefer_pro=st.session_state.get('prefer_pro', False),
+                                            max_file_size_mb=st.session_state.get('max_file_size_mb', 1),
+                                            include_docs=st.session_state.get('include_docs', False)
+                                        )
+                                        
+                                        if rag_service is None:
+                                            st.error("❌ **Error al crear el servicio RAG**")
+                                            st.info("Verifica que tu API key sea válida y que tengas conexión a internet.")
+                                            return
+                                        
+                                        if rag_service.index_repository(repo):
+                                            st.success("✅ **Indexación completada**")
+                                            
+                                            success, rag_service, agent_workflow = _setup_services(repo)
+                                            
+                                            if success:
+                                                st.session_state.rag_service = rag_service
+                                                st.session_state.agent_workflow = agent_workflow
+                                                st.session_state.current_repo = repo
+                                                st.session_state.repository_loaded = True
+                                                st.session_state.messages = []
+                                                st.success("🤖 **Agentes LangGraph inicializados**")
+                                            else:
+                                                st.warning("⚠️ **Agentes no inicializados**")
+                                                st.info("Los agentes requieren API key válida. Configúrala en Configuración.")
+                                            
+                                            _show_indexing_stats(rag_service.get_stats(), columns=3)
+                                        else:
+                                            st.error("❌ **Error en indexación**")
+                                    except Exception as e:
+                                        error_msg = str(e).lower()
+                                        if 'quota' in error_msg or '429' in error_msg or 'rate limit' in error_msg:
+                                            st.error("⚠️ **Límite de API alcanzado**")
+                                            st.info("Has superado el límite diario de solicitudes. Las consultas estarán disponibles mañana.")
+                                            st.session_state.daily_limit_reached = True
+                                        else:
+                                            st.error(f"❌ **Error:** {str(e)}")
+                                            st.info("Verifica tu API key en la pestaña Configuración.")
+                        else:
+                            st.error("❌ **Error: Repositorio sin ID**")
                     else:
                         st.error("❌ **No se encontraron archivos válidos**")
             else:
@@ -294,9 +401,9 @@ def show_chat_section() -> None:
         return
     
     if 'agent_workflow' not in st.session_state or not st.session_state.agent_workflow:
-        with st.spinner("🤖 Inicializando agentes..."):
-            st.session_state.agent_workflow = AgentWorkflow(st.session_state.rag_service)
-            st.success("✅ Agentes listos")
+        st.warning("⚠️ **Los agentes no están disponibles**")
+        st.info("Verifica que tu API key sea válida en la pestaña Configuración.")
+        return
     
     if st.session_state.get('daily_limit_reached', False):
         st.error("⚠️ **Límite diario de API alcanzado**")
@@ -391,29 +498,9 @@ def show_analysis_section() -> None:
     
     repo = st.session_state.current_repo
     
-    # Si es diccionario, significa que se cargó desde BD pero no se reconstruyó
     if isinstance(repo, dict):
         st.error("❌ **Error: Repositorio cargado incorrectamente**")
         st.info("Por favor, vuelve a cargar el repositorio desde la página de inicio o desde 'Cargar Repositorio'")
-        
-        col1, col2, col3, col4 = st.columns(4)
-        with col1:
-            st.metric("📄 Archivos", repo.get('file_count', 0))
-        with col2:
-            st.metric("🔧 Funciones", repo.get('total_functions', 0))
-        with col3:
-            st.metric("📚 Clases", repo.get('total_classes', 0))
-        with col4:
-            st.metric("📊 Líneas", repo.get('total_lines', 0))
-        
-        metadata = repo.get('metadata', {})
-        if metadata.get('framework') == 'django':
-            st.success("🐍 **Proyecto Django detectado**")
-            st.markdown("""
-            - Modelos, vistas y URLs analizados
-            - Archivos de migración ignorados automáticamente
-            - Configuración y archivos de gestión excluidos
-            """)
         return
     
     col1, col2, col3, col4 = st.columns(4)
@@ -514,7 +601,7 @@ def show_analysis_section() -> None:
 
 
 def show_repositories_list() -> None:
-    """Muestra lista de repositorios."""
+    """Muestra lista de repositorios con eliminación directa."""
     st.title("📚 Repositorios Analizados")
     
     if 'repo_service' not in st.session_state:
@@ -524,7 +611,25 @@ def show_repositories_list() -> None:
     
     if not repos:
         st.info("📭 **No hay repositorios analizados**")
+        st.info("👉 Ve a la pestaña **Cargar Repositorio** para comenzar")
         return
+    
+    # Información sobre eliminación
+    with st.expander("ℹ️ Información sobre eliminación", expanded=False):
+        st.markdown("""
+        **Al eliminar un repositorio se elimina:**
+        - ✅ Metadatos de la base de datos
+        - ✅ Índices de búsqueda (FAISS)
+        - ✅ Fragmentos de código en caché
+        - ✅ Copia del repositorio en `data/repositories/`
+        
+        **NO se elimina:**
+        - ❌ El repositorio original en tu disco (si cargaste desde directorio local)
+        
+        **Para volver a cargar el repositorio:**
+        - Solo necesitas volver a cargarlo desde la misma ubicación
+        - Se regenerarán los índices automáticamente
+        """)
     
     for repo in repos:
         with st.container():
@@ -534,9 +639,13 @@ def show_repositories_list() -> None:
                 st.write(f"**{repo['name']}**")
                 path = Path(repo['path'])
                 if path.exists():
-                    st.caption("✅ Archivos en disco")
+                    # Verificar si es el original o copia
+                    if "data/repositories" in str(path):
+                        st.caption(f"📁 Copia en caché")
+                    else:
+                        st.caption(f"📁 Original: {repo['path']}")
                 else:
-                    st.caption("⚠️ No encontrado")
+                    st.caption("⚠️ No encontrado en disco")
             
             with cols[1]:
                 st.write(f"📁 {repo['file_count']}")
@@ -550,10 +659,25 @@ def show_repositories_list() -> None:
                     fecha = str(created_at)[:10]
                 st.write(f"🕐 {fecha}")
             with cols[4]:
-                if st.button("🗑️", key=f"delete_{repo['id']}"):
-                    if st.session_state.repo_service.delete_repository(repo['id']):
-                        st.success(f"Repositorio {repo['name']} eliminado")
-                        st.rerun()
+                # Botón de eliminar directo
+                if st.button("🗑️ Eliminar", key=f"delete_{repo['id']}", help="Eliminar repositorio del sistema"):
+                    with st.spinner(f"Eliminando repositorio {repo['name']}..."):
+                        success = st.session_state.repo_service.delete_repository(repo['id'])
+                        if success:
+                            st.success(f"✅ Repositorio '{repo['name']}' eliminado del sistema")
+                            # Limpiar estado si era el repositorio actual
+                            if 'current_repo' in st.session_state and st.session_state.current_repo:
+                                if hasattr(st.session_state.current_repo, 'name') and \
+                                   st.session_state.current_repo.name == repo['name']:
+                                    st.session_state.current_repo = None
+                                    st.session_state.repository_loaded = False
+                                    st.session_state.rag_service = None
+                                    st.session_state.agent_workflow = None
+                                    st.session_state.messages = []
+                            st.rerun()
+                        else:
+                            st.error(f"❌ Error al eliminar '{repo['name']}'")
+                            st.info("Verifica que no haya archivos en uso o que tengas permisos suficientes.")
             
             st.divider()
 
@@ -566,30 +690,64 @@ def show_configuration_section() -> None:
     
     with tab1:
         st.subheader("🔑 API Key de Gemini")
-        current_key = os.getenv("GEMINI_API_KEY", "")
-        masked = current_key[:10] + "..." + current_key[-5:] if current_key else "No configurada"
-        st.info(f"API Key actual: `{masked}`")
         
-        new_key = st.text_input("Nueva API Key:", type="password", placeholder="AIzaSy...")
+        current_key = os.getenv("GEMINI_API_KEY", "")
+        is_configured = ServiceFactory.is_api_key_valid()
+        
+        if is_configured:
+            masked = current_key[:10] + "..." + current_key[-5:] if current_key else "Configurada"
+            st.success(f"✅ **API Key configurada:** `{masked}`")
+        else:
+            st.error("❌ **API Key no configurada**")
+            st.info("""
+            **Para obtener tu API key gratuita:**
+            1. Ve a [makersuite.google.com/app/apikey](https://makersuite.google.com/app/apikey)
+            2. Inicia sesión con tu cuenta Google
+            3. Crea una nueva API key
+            4. Cópiala y pégala aquí
+            """)
+        
+        new_key = st.text_input(
+            "Nueva API Key:",
+            type="password",
+            placeholder="AIzaSy...",
+            help="Ingresa tu API key de Google AI Studio"
+        )
         
         col1, col2 = st.columns(2)
         with col1:
-            if st.button("💾 Guardar", use_container_width=True):
+            if st.button("💾 Guardar API Key", use_container_width=True):
                 if new_key:
                     if save_env_var("GEMINI_API_KEY", new_key):
-                        st.success("✅ API Key guardada")
+                        st.success("✅ API Key guardada correctamente")
                         st.rerun()
-        with col2:
-            if st.button("🔄 Probar", use_container_width=True):
-                try:
-                    test_llm = GeminiLLM()
-                    st.success("✅ Conexión exitosa!")
-                except Exception as e:
-                    error_msg = str(e).lower()
-                    if 'quota' in error_msg or '429' in error_msg:
-                        st.error("⚠️ Límite de API alcanzado. Espera hasta mañana.")
                     else:
-                        st.error(f"❌ Error: {e}")
+                        st.error("❌ Error guardando API Key")
+                else:
+                    st.warning("Ingresa una API Key")
+        
+        with col2:
+            if st.button("🔄 Probar conexión", use_container_width=True):
+                if not new_key and not is_configured:
+                    st.warning("Primero ingresa una API Key")
+                else:
+                    try:
+                        test_key = new_key or current_key
+                        if test_key:
+                            import google.generativeai as genai
+                            genai.configure(api_key=test_key)
+                            models = genai.list_models()
+                            st.success("✅ Conexión exitosa! API Key válida")
+                        else:
+                            st.error("No hay API Key para probar")
+                    except Exception as e:
+                        error_msg = str(e).lower()
+                        if 'quota' in error_msg or '429' in error_msg:
+                            st.error("⚠️ Límite de API alcanzado. Espera hasta mañana.")
+                        elif 'api_key' in error_msg or 'invalid' in error_msg:
+                            st.error("❌ API Key inválida. Verifica que la hayas copiado correctamente.")
+                        else:
+                            st.error(f"❌ Error: {e}")
     
     with tab2:
         st.subheader("🤖 Modelos")

@@ -13,8 +13,7 @@ import streamlit as st
 from datetime import datetime
 import os
 from dotenv import load_dotenv
-from application.services.rag_gemini_service import RAGService
-from application.graph.workflow import AgentWorkflow
+from application.services.service_factory import ServiceFactory
 
 # Cargar variables de entorno
 load_dotenv()
@@ -218,31 +217,26 @@ def show_welcome_page() -> None:
                     st.write(f"🕐 {fecha}")
                 
                 with cols[4]:
-                   if st.button("Cargar", key=f"welcome_load_{repo['id']}"):
+                    if st.button("Cargar", key=f"welcome_load_{repo['id']}"):
                         with st.spinner(f"Cargando repositorio {repo['name']}..."):
                             try:
-                                # Reconstruir repositorio desde MySQL (sin regenerar embeddings)
+                                                               
                                 repo_obj = st.session_state.repo_service.load_repository_from_db(repo['id'])
                                 
-                                if repo_obj:                                   
-                                    
-                                    # Crear RAGService (usará FAISS existente, no regenerará embeddings)
-                                    rag_service = RAGService(
-                                        repo_name=repo_obj.name,
-                                        repo_path=repo_obj.path,
-                                        repo_id=repo['id'],
+                                if repo_obj:
+                                    rag_service, agent_workflow = ServiceFactory.setup_repository_services(
+                                        repo=repo_obj,
                                         prefer_pro=st.session_state.prefer_pro,
                                         max_file_size_mb=st.session_state.max_file_size_mb,
                                         include_docs=st.session_state.include_docs
                                     )
-                                    # NO llamar a index_repository() - usar vector store existente
                                     
                                     st.session_state.rag_service = rag_service
+                                    st.session_state.agent_workflow = agent_workflow
                                     st.session_state.current_repo = repo_obj
                                     st.session_state.repository_loaded = True
                                     st.session_state.messages = []
                                     
-                                    st.session_state.agent_workflow = AgentWorkflow(rag_service)
                                     st.success(f"✅ Repositorio {repo['name']} cargado desde BD")
                                     st.success("🤖 Agentes LangGraph inicializados")
                                     st.rerun()
@@ -251,7 +245,7 @@ def show_welcome_page() -> None:
                                     
                             except Exception as e:
                                 st.error(f"❌ Error: {str(e)}")
-                
+                                    
                 st.divider()
     else:
         st.info("👈 **Comienza cargando un repositorio** en la sección 'Cargar Repositorio'")

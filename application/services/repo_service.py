@@ -12,6 +12,8 @@ from datetime import datetime
 import re
 import hashlib
 import os
+import time
+import stat
 
 from domain.models.repository import Repository, CodeFile, Function, Class
 from infrastructure.database.mysql_repository import MySQLRepository
@@ -257,6 +259,7 @@ class RepositoryService:
     def load_from_zip(self, zip_path: Union[str, Path]) -> Optional[Repository]:
         """
         Carga repositorio desde ZIP.
+        Verifica si ya existe antes de procesar.
         
         Args:
             zip_path: Ruta al archivo ZIP
@@ -284,12 +287,20 @@ class RepositoryService:
             final_path = self._detect_repo_root(temp_dir)
             logger.info(f"Raíz del repositorio: {final_path}")
             
+            # Verificar si ya existe por la ruta
+            existing = self.db.get_repository_by_path(str(final_path))
+            if existing:
+                logger.info(f"Repositorio ya existe en BD con ID: {existing['id']}")
+                # Limpiar directorio temporal
+                shutil.rmtree(temp_dir)
+                # Retornar el repositorio existente reconstruido
+                return self.load_repository_from_db(existing['id'])
+            
             repository = self._analyze_directory(final_path, repo_name)
             
             if repository and repository.files:
                 repo_id = self.db.save_repository(repository)
                 repository.db_id = repo_id
-                
                 logger.info(f"Repositorio procesado: {len(repository.files)} archivos")
                 return repository
             else:
@@ -306,17 +317,25 @@ class RepositoryService:
     def load_from_directory(self, directory_path: Union[str, Path]) -> Optional[Repository]:
         """
         Carga repositorio desde directorio local.
+        Verifica si ya existe antes de procesar.
         
         Args:
             directory_path: Ruta al directorio
             
         Returns:
-            Repositorio analizado
+            Repositorio analizado o None
         """
         directory_path = Path(directory_path)
         if not directory_path.exists() or not directory_path.is_dir():
             logger.error(f"Directorio no válido: {directory_path}")
             return None
+        
+        # Verificar si el repositorio ya existe en la base de datos
+        existing = self.db.get_repository_by_path(str(directory_path))
+        if existing:
+            logger.info(f"Repositorio ya existe en BD con ID: {existing['id']}")
+            # Retornar el repositorio existente reconstruido
+            return self.load_repository_from_db(existing['id'])
         
         repo_name = directory_path.name
         logger.info(f"Cargando desde directorio: {directory_path}")
@@ -664,20 +683,112 @@ class RepositoryService:
         """Lista todos los repositorios analizados."""
         return self.db.list_repositories()
     
+    def _delete_directory_with_retry(self, path: Path, max_retries: int = 3) -> bool:
+        """
+        Elimina un directorio manejando archivos de solo lectura.
+        Solo se usa para eliminar copias en data/repositories/.
+        
+        Args:
+            path: Ruta del directorio a eliminar
+            max_retries: Número máximo de reintentos
+            
+        Returns:
+            True si se eliminó correctamente
+        """
+        if not path.exists():
+            return True
+        
+        # Verificar seguridad: solo eliminar dentro de data/repositories/
+        if "data/repositories" not in str(path):
+            logger.warning(f"No se elimina por seguridad: {path}")
+            return False
+        
+        def _on_rmtree_error(func, path, exc_info):
+            """Manejador de errores para shutil.rmtree."""
+            try:
+                os.chmod(path, stat.S_IWRITE)
+                func(path)
+            except Exception as e:
+                logger.warning(f"No se pudo eliminar {path}: {e}")
+        
+        for attempt in range(max_retries):
+            try:
+                shutil.rmtree(path, onerror=_on_rmtree_error)
+                logger.info(f"Copia del repositorio eliminada: {path}")
+                return True
+            except Exception as e:
+                logger.warning(f"Intento {attempt + 1} falló: {e}")
+                if attempt < max_retries - 1:
+                    time.sleep(1)
+        
+        return False
+    
     def delete_repository(self, repo_id: int, delete_files: bool = True) -> bool:
-        """Elimina repositorio."""
+        """
+        Elimina repositorio (BD, vectores, caché, pero NO archivos originales del usuario).
+        
+        Args:
+            repo_id: ID del repositorio
+            delete_files: Si True, elimina archivos en data/repositories/ (copias)
+            
+        Returns:
+            True si éxito
+        """
         try:
-            repo_path = self.get_repository_path(repo_id)
+            # Obtener información del repositorio
+            repo_data = self.db.get_repository(repo_id)
+            if not repo_data:
+                logger.error(f"Repositorio no encontrado: {repo_id}")
+                return False
+            
+            repo_path = Path(repo_data['path'])
+            repo_name = repo_data['name']
+            
+            # 1. Eliminar de base de datos (metadatos)
             result = self.db.delete_repository(repo_id)
             
-            if delete_files and repo_path and repo_path.exists():
-                shutil.rmtree(repo_path)
-                logger.info(f"Archivos eliminados: {repo_path}")
+            if not result:
+                logger.error(f"Error eliminando repositorio de BD: {repo_id}")
+                return False
             
-            return result
+            # 2. Eliminar vectores FAISS
+            try:
+                safe_name = repo_name.replace(' ', '_').replace('/', '_').replace('\\', '_')
+                index_path = Path(f"data/vectors/{safe_name}.index")
+                if index_path.exists():
+                    index_path.unlink()
+                    logger.info(f"Vectores eliminados: {index_path}")
+            except Exception as e:
+                logger.warning(f"Error eliminando vectores: {e}")
+            
+            # 3. Eliminar fragmentos de caché
+            try:
+                # Buscar todos los fragmentos asociados a este repositorio
+                cache_files_dir = Path("data/cache/files")
+                if cache_files_dir.exists():
+                    for chunk_file in cache_files_dir.glob(f"{repo_id}:*"):
+                        try:
+                            chunk_file.unlink()
+                        except Exception:
+                            pass
+                    logger.info(f"Fragmentos de caché eliminados para repo {repo_id}")
+            except Exception as e:
+                logger.warning(f"Error eliminando fragmentos de caché: {e}")
+            
+            # 4. Eliminar archivos copiados en data/repositories/ (si existe)
+            if delete_files and repo_path and repo_path.exists():
+                # Verificar que está dentro de data/repositories/ (seguridad)
+                if "data/repositories" in str(repo_path):
+                    logger.info(f"Eliminando copia del repositorio: {repo_path}")
+                    self._delete_directory_with_retry(repo_path)
+                else:
+                    logger.info(f"No se elimina directorio original del usuario: {repo_path}")
+            
+            logger.info(f"Repositorio {repo_name} eliminado correctamente")
+            return True
             
         except Exception as e:
-            logger.error(f"Error eliminando repositorio: {e}")
+            logger.error(f"Error eliminando repositorio {repo_id}: {e}")
             return False
     
     def get_repository_stats(self) -> Dict[str, Any]:
