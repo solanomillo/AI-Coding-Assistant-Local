@@ -1,6 +1,6 @@
 """
 Módulo de interfaz de usuario para AI Coding Assistant Local.
-Versión con integración de agentes LangGraph.
+Contiene solo las funciones de UI. El sidebar y navegación están en main.py.
 """
 
 import streamlit as st
@@ -9,7 +9,6 @@ from pathlib import Path
 import tempfile
 import os
 from dotenv import load_dotenv, set_key
-from datetime import datetime
 from typing import Union, Dict, Any, List
 
 from application.services.repo_service import RepositoryService
@@ -22,14 +21,6 @@ logger = logging.getLogger(__name__)
 # Cargar variables de entorno
 load_dotenv()
 ENV_FILE = ".env"
-
-# Configuración de página
-st.set_page_config(
-    page_title="🤖 AI Coding Assistant",
-    page_icon="🤖",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
 
 
 def save_env_var(key: str, value: str) -> bool:
@@ -73,18 +64,6 @@ def get_repo_name(repo: Union[Dict[str, Any], Any]) -> str:
         return repo.get('name', 'desconocido')
     else:
         return getattr(repo, 'name', 'desconocido')
-
-
-def initialize_agent_workflow() -> None:
-    """
-    Inicializa el flujo de agentes si hay un repositorio activo.
-    """
-    if 'rag_service' in st.session_state and st.session_state.rag_service:
-        if 'agent_workflow' not in st.session_state or st.session_state.agent_workflow is None:
-            st.session_state.agent_workflow = AgentWorkflow(st.session_state.rag_service)
-            logger.info("AgentWorkflow inicializado")
-    else:
-        st.session_state.agent_workflow = None
 
 
 def show_upload_section() -> None:
@@ -181,8 +160,8 @@ def show_upload_section() -> None:
                                     st.session_state.repository_loaded = True
                                     st.session_state.current_repo = repo
                                     st.session_state.messages = []
+                                    st.session_state.daily_limit_reached = rag_service._daily_limit_reached
                                     
-                                    # Inicializar agentes
                                     st.session_state.agent_workflow = AgentWorkflow(rag_service)
                                     st.success("🤖 **Agentes LangGraph inicializados**")
                                     
@@ -197,11 +176,21 @@ def show_upload_section() -> None:
                                     with col4:
                                         st.metric("📐 Dimensión", stats['embedding_dimension'])
                                     
+                                    if stats.get('daily_limit_reached', False):
+                                        st.warning("⚠️ **Límite diario de API alcanzado durante indexación**")
+                                        st.info("Las consultas estarán disponibles mañana. El repositorio ha sido indexado parcialmente.")
+                                    
                                 else:
                                     st.error("❌ **Error en indexación**")
                                     
                             except Exception as e:
-                                st.error(f"❌ **Error en Gemini:** {str(e)}")
+                                error_msg = str(e).lower()
+                                if 'quota' in error_msg or '429' in error_msg or 'rate limit' in error_msg:
+                                    st.error("⚠️ **Límite de API alcanzado**")
+                                    st.info("Has superado el límite diario de solicitudes. Las consultas estarán disponibles mañana.")
+                                    st.session_state.daily_limit_reached = True
+                                else:
+                                    st.error(f"❌ **Error en Gemini:** {str(e)}")
                                 logger.error(f"Error de indexación: {e}", exc_info=True)
                     else:
                         st.error("❌ **No se encontraron archivos válidos**")
@@ -258,6 +247,7 @@ def show_upload_section() -> None:
                                     st.session_state.repository_loaded = True
                                     st.session_state.current_repo = repo
                                     st.session_state.messages = []
+                                    st.session_state.daily_limit_reached = rag_service._daily_limit_reached
                                     
                                     st.session_state.agent_workflow = AgentWorkflow(rag_service)
                                     st.success("🤖 **Agentes LangGraph inicializados**")
@@ -270,10 +260,19 @@ def show_upload_section() -> None:
                                         st.metric("📞 API Calls", stats['processing_stats']['api_calls'])
                                     with col3:
                                         st.metric("⚠️ Rate Limits", stats['processing_stats']['rate_limit_hits'])
+                                    
+                                    if stats.get('daily_limit_reached', False):
+                                        st.warning("⚠️ **Límite diario de API alcanzado durante indexación**")
                                 else:
                                     st.error("❌ **Error en indexación**")
                             except Exception as e:
-                                st.error(f"❌ **Error:** {str(e)}")
+                                error_msg = str(e).lower()
+                                if 'quota' in error_msg or '429' in error_msg or 'rate limit' in error_msg:
+                                    st.error("⚠️ **Límite de API alcanzado**")
+                                    st.info("Has superado el límite diario de solicitudes. Las consultas estarán disponibles mañana.")
+                                    st.session_state.daily_limit_reached = True
+                                else:
+                                    st.error(f"❌ **Error:** {str(e)}")
                     else:
                         st.error("❌ **No se encontraron archivos válidos**")
             else:
@@ -281,7 +280,7 @@ def show_upload_section() -> None:
 
 
 def show_chat_section() -> None:
-    """Sección de chat con agentes LangGraph."""
+    """Sección de chat con agentes LangGraph (selección automática)."""
     st.title("💬 Chat con Agentes IA")
     
     if 'current_repo' not in st.session_state or not st.session_state.current_repo:
@@ -299,58 +298,10 @@ def show_chat_section() -> None:
             st.session_state.agent_workflow = AgentWorkflow(st.session_state.rag_service)
             st.success("✅ Agentes listos")
     
-    # Barra lateral con información
-    with st.sidebar:
-        st.markdown("---")
-        st.subheader("🤖 Agentes Disponibles")
-        
-        agents = {
-            "🤖 Automático": "El router decide qué agente usar",
-            "📖 Explicar": "Explica funciones, clases y código",
-            "🔍 Revisar": "Revisa código y sugiere mejoras",
-            "📚 Documentar": "Genera documentación automática",
-            "💬 General": "Consulta general con RAG"
-        }
-        
-        # Selector de agente
-        agent_option = st.radio(
-            "Selecciona un agente:",
-            list(agents.keys()),
-            index=0,
-            help=agents["🤖 Automático"]
-        )
-        
-        if agent_option == "🤖 Automático":
-            st.session_state.selected_agent = "auto"
-        elif agent_option == "📖 Explicar":
-            st.session_state.selected_agent = "explain"
-        elif agent_option == "🔍 Revisar":
-            st.session_state.selected_agent = "review"
-        elif agent_option == "📚 Documentar":
-            st.session_state.selected_agent = "docs"
-        else:
-            st.session_state.selected_agent = "general"
-        
-        st.markdown("---")
-        st.subheader("📊 Estadísticas")
-        
-        repo_name = get_repo_name(st.session_state.current_repo)
-        st.info(f"📁 **{repo_name}**")
-        
-        if 'rag_service' in st.session_state:
-            try:
-                stats = st.session_state.rag_service.get_stats()
-                st.metric("🎯 Fragmentos", stats['processing_stats']['chunks_processed'])
-                st.metric("📞 API Calls", stats['processing_stats']['api_calls'])
-                st.metric("⚠️ Rate Limits", stats['processing_stats']['rate_limit_hits'])
-            except Exception:
-                pass
-        
-        st.markdown("---")
-        st.caption("🤖 Agentes con LangGraph")
-        st.caption("Explicar | Revisar | Documentar")
+    if st.session_state.get('daily_limit_reached', False):
+        st.error("⚠️ **Límite diario de API alcanzado**")
+        st.info("Las consultas que requieran la API no funcionarán hasta mañana. Puedes seguir usando repositorios ya indexados para consultas generales.")
     
-    # Historial de chat
     if "messages" not in st.session_state:
         st.session_state.messages = []
     
@@ -365,60 +316,30 @@ def show_chat_section() -> None:
                         st.write(f"**📄 {source['file']}**")
                         st.code(source['preview'], language='python')
     
-    # Input
     if prompt := st.chat_input("💬 Pregunta sobre el código..."):
         st.session_state.messages.append({"role": "user", "content": prompt})
         with st.chat_message("user"):
             st.markdown(prompt)
         
         with st.chat_message("assistant"):
+            if st.session_state.get('daily_limit_reached', False):
+                st.warning("⚠️ **Límite diario de API alcanzado**")
+                st.info("Las consultas estarán disponibles mañana. Por favor, intenta nuevamente más tarde.")
+                st.session_state.messages.append({
+                    "role": "assistant",
+                    "content": "⚠️ **Límite diario de API alcanzado.** Las consultas estarán disponibles mañana. Por favor, intenta nuevamente más tarde.",
+                    "agent_used": "Sistema",
+                    "sources": []
+                })
+                return
+            
             with st.spinner("🤖 Procesando con agentes..."):
                 try:
-                    # Usar agente seleccionado
-                    if st.session_state.get('selected_agent') == "auto":
-                        # Usar workflow completo
-                        result = st.session_state.agent_workflow.process(prompt)
-                    else:
-                        # Usar agente específico
-                        agent_type = st.session_state.selected_agent
-                        if agent_type == "explain":
-                            from application.agents.explain_agent import ExplainAgent
-                            agent = ExplainAgent()
-                        elif agent_type == "review":
-                            from application.agents.review_agent import ReviewAgent
-                            agent = ReviewAgent()
-                        elif agent_type == "docs":
-                            from application.agents.docs_agent import DocsAgent
-                            agent = DocsAgent()
-                        else:
-                            result = st.session_state.rag_service.query(prompt, include_sources=True)
-                            st.markdown(result['answer'])
-                            if result.get('sources'):
-                                with st.expander("📚 Fuentes"):
-                                    for s in result['sources']:
-                                        st.write(f"**{s['file']}**")
-                                        st.code(s['preview'])
-                            st.session_state.messages.append({
-                                "role": "assistant",
-                                "content": result['answer'],
-                                "sources": result.get('sources', []),
-                                "agent_used": "RAG General"
-                            })
-                            return
-                        
-                        # Configurar agente
-                        agent.set_llm(st.session_state.rag_service.llm)
-                        agent.set_vector_store(st.session_state.rag_service.vector_store)
-                        agent.set_repo_context({
-                            'name': get_repo_name(st.session_state.current_repo),
-                            'id': st.session_state.rag_service.repo_id
-                        })
-                        
-                        result = agent.process(prompt)
+                    result = st.session_state.agent_workflow.process(prompt)
                     
                     answer = result.get('answer', 'No se pudo generar respuesta')
                     sources = result.get('sources', [])
-                    agent_used = result.get('agent', st.session_state.selected_agent)
+                    agent_used = result.get('agent', 'desconocido')
                     
                     st.markdown(answer)
                     
@@ -438,23 +359,42 @@ def show_chat_section() -> None:
                     })
                     
                 except Exception as e:
-                    st.error(f"❌ **Error:** {str(e)}")
+                    error_msg = str(e).lower()
+                    if 'quota' in error_msg or '429' in error_msg or 'rate limit' in error_msg:
+                        st.error("⚠️ **Límite de API alcanzado**")
+                        st.info("Has superado el límite diario de solicitudes. Las consultas estarán disponibles mañana.")
+                        st.session_state.daily_limit_reached = True
+                        response = "⚠️ **Límite diario de API alcanzado.** Las consultas estarán disponibles mañana. Por favor, intenta nuevamente más tarde."
+                    else:
+                        st.error(f"❌ **Error:** {str(e)}")
+                        response = f"Error: {str(e)}"
+                    
+                    st.markdown(response)
                     logger.error(f"Error en chat: {e}", exc_info=True)
+                    
+                    st.session_state.messages.append({
+                        "role": "assistant",
+                        "content": response,
+                        "sources": [],
+                        "agent_used": "Error"
+                    })
 
 
 def show_analysis_section() -> None:
-    """Sección de análisis con vista por lenguaje."""
+    """Sección de análisis con vista por lenguaje y soporte Django."""
     st.title("📊 Análisis del Repositorio")
     
     if 'current_repo' not in st.session_state or not st.session_state.current_repo:
         st.warning("⚠️ **Primero carga un repositorio**")
+        st.info("👉 Ve a la pestaña **Cargar Repositorio** para comenzar")
         return
     
     repo = st.session_state.current_repo
     
+    # Si es diccionario, significa que se cargó desde BD pero no se reconstruyó
     if isinstance(repo, dict):
-        st.warning("⚠️ **Vista limitada**")
-        st.info("Para análisis completo, indexa el repositorio nuevamente")
+        st.error("❌ **Error: Repositorio cargado incorrectamente**")
+        st.info("Por favor, vuelve a cargar el repositorio desde la página de inicio o desde 'Cargar Repositorio'")
         
         col1, col2, col3, col4 = st.columns(4)
         with col1:
@@ -465,6 +405,15 @@ def show_analysis_section() -> None:
             st.metric("📚 Clases", repo.get('total_classes', 0))
         with col4:
             st.metric("📊 Líneas", repo.get('total_lines', 0))
+        
+        metadata = repo.get('metadata', {})
+        if metadata.get('framework') == 'django':
+            st.success("🐍 **Proyecto Django detectado**")
+            st.markdown("""
+            - Modelos, vistas y URLs analizados
+            - Archivos de migración ignorados automáticamente
+            - Configuración y archivos de gestión excluidos
+            """)
         return
     
     col1, col2, col3, col4 = st.columns(4)
@@ -479,6 +428,24 @@ def show_analysis_section() -> None:
     with col4:
         st.metric("📊 Líneas", repo.total_lines)
     
+    if hasattr(repo, 'metadata') and repo.metadata.get('framework') == 'django':
+        st.success("🐍 **Proyecto Django detectado**")
+        
+        models_count = len([f for f in repo.files if 'models.py' in f.name])
+        views_count = len([f for f in repo.files if 'views.py' in f.name])
+        urls_count = len([f for f in repo.files if 'urls.py' in f.name])
+        admin_count = len([f for f in repo.files if 'admin.py' in f.name])
+        
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            st.metric("📦 Modelos", models_count)
+        with col2:
+            st.metric("👁️ Vistas", views_count)
+        with col3:
+            st.metric("🔗 URLs", urls_count)
+        with col4:
+            st.metric("⚙️ Admin", admin_count)
+    
     extension_counts = {}
     for file in repo.files:
         ext = file.extension
@@ -491,9 +458,10 @@ def show_analysis_section() -> None:
             with cols[idx % 5]:
                 st.metric(ext, count)
     
-    st.subheader("📁 Archivos")
+    st.subheader("📁 Archivos del repositorio")
+    
     extensions = sorted(set(f.extension for f in repo.files))
-    selected_ext = st.selectbox("Filtrar:", ["Todos"] + extensions)
+    selected_ext = st.selectbox("Filtrar por extensión:", ["Todos"] + extensions)
     
     files_to_show = repo.files
     if selected_ext != "Todos":
@@ -521,6 +489,25 @@ def show_analysis_section() -> None:
                         line_start = func.line_start
                         line_end = func.line_end
                     st.write(f"- `{func_name}` ({line_start}-{line_end})")
+            
+            if file.classes:
+                st.write("**📚 Clases:**")
+                for cls in file.classes[:5]:
+                    if isinstance(cls, dict):
+                        cls_name = cls.get('name', 'unknown')
+                        methods = cls.get('methods', [])
+                    else:
+                        cls_name = cls.name
+                        methods = cls.methods
+                    
+                    st.write(f"- `{cls_name}`")
+                    if methods:
+                        for method in methods[:3]:
+                            if isinstance(method, dict):
+                                method_name = method.get('name', 'unknown')
+                            else:
+                                method_name = method.name
+                            st.write(f"  - método: `{method_name}()`")
     
     if len(files_to_show) > 50:
         st.info(f"📊 Mostrando 50 de {len(files_to_show)} archivos")
@@ -598,7 +585,11 @@ def show_configuration_section() -> None:
                     test_llm = GeminiLLM()
                     st.success("✅ Conexión exitosa!")
                 except Exception as e:
-                    st.error(f"❌ Error: {e}")
+                    error_msg = str(e).lower()
+                    if 'quota' in error_msg or '429' in error_msg:
+                        st.error("⚠️ Límite de API alcanzado. Espera hasta mañana.")
+                    else:
+                        st.error(f"❌ Error: {e}")
     
     with tab2:
         st.subheader("🤖 Modelos")
@@ -640,70 +631,3 @@ def show_configuration_section() -> None:
                 vectors_dir.mkdir()
                 st.success("✅ Vectores limpiados")
                 st.rerun()
-
-
-def main() -> None:
-    """Función principal."""
-    
-    if 'prefer_pro' not in st.session_state:
-        st.session_state.prefer_pro = False
-    if 'temperature' not in st.session_state:
-        st.session_state.temperature = 0.2
-    if 'k_results' not in st.session_state:
-        st.session_state.k_results = 5
-    if 'max_file_size_mb' not in st.session_state:
-        st.session_state.max_file_size_mb = 1
-    if 'include_docs' not in st.session_state:
-        st.session_state.include_docs = False
-    if 'messages' not in st.session_state:
-        st.session_state.messages = []
-    if 'selected_agent' not in st.session_state:
-        st.session_state.selected_agent = "auto"
-    
-    with st.sidebar:
-        st.image("https://img.icons8.com/fluency/96/robot.png", width=80)
-        st.title("🤖 AI Coding Assistant")
-        
-        st.markdown("---")
-        
-        page = st.radio(
-            "📋 **Navegación**",
-            [
-                "📤 Cargar Repositorio",
-                "📊 Analizar",
-                "💬 Chat con Agentes",
-                "📚 Repositorios",
-                "⚙️ Configuración"
-            ],
-            label_visibility="collapsed"
-        )
-        
-        st.markdown("---")
-        
-        st.subheader("📊 Estado")
-        if 'current_repo' in st.session_state and st.session_state.current_repo:
-            repo_name = get_repo_name(st.session_state.current_repo)
-            repo_files = get_repo_file_count(st.session_state.current_repo)
-            st.success(f"✅ **{repo_name}**")
-            st.metric("📄 Archivos", repo_files)
-        else:
-            st.warning("⏳ **Sin repositorio**")
-        
-        st.markdown("---")
-        st.caption("v1.0.0 | Gemini + FAISS")
-        st.caption("Agentes LangGraph")
-    
-    if page == "📤 Cargar Repositorio":
-        show_upload_section()
-    elif page == "📊 Analizar":
-        show_analysis_section()
-    elif page == "💬 Chat con Agentes":
-        show_chat_section()
-    elif page == "📚 Repositorios":
-        show_repositories_list()
-    else:
-        show_configuration_section()
-
-
-if __name__ == "__main__":
-    main()

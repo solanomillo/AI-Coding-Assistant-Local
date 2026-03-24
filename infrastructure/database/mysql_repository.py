@@ -1,6 +1,5 @@
 """
 Repositorio MySQL para persistencia de metadatos.
-Renombrado y optimizado desde repository_repo.py
 """
 
 import pymysql
@@ -64,7 +63,6 @@ class MySQLRepository:
         try:
             with self._get_connection() as conn:
                 with conn.cursor() as cursor:
-                    # Verificar tablas
                     cursor.execute("SHOW TABLES")
                     tables = [t['Tables_in_' + self.config['database']] for t in cursor.fetchall()]
                     
@@ -243,13 +241,53 @@ class MySQLRepository:
             return False
     
     def get_files(self, repo_id: int) -> List[Dict[str, Any]]:
-        """Obtiene archivos de un repositorio."""
+        """Obtiene todos los archivos de un repositorio."""
         try:
             with self._get_connection() as conn:
                 with conn.cursor() as cursor:
-                    sql = "SELECT * FROM files WHERE repository_id = %s"
+                    sql = """
+                        SELECT id, file_path, file_name, extension, 
+                               line_count, function_count, class_count, content_hash
+                        FROM files 
+                        WHERE repository_id = %s
+                        ORDER BY file_path
+                    """
                     cursor.execute(sql, (repo_id,))
                     return cursor.fetchall()
         except pymysql.Error as e:
             logger.error(f"Error obteniendo archivos: {e}")
+            return []
+    
+    def get_functions(self, file_id: int) -> List[Dict[str, Any]]:
+        """Obtiene todas las funciones de un archivo."""
+        try:
+            with self._get_connection() as conn:
+                with conn.cursor() as cursor:
+                    sql = """
+                        SELECT id, name, line_start, line_end, docstring, complexity
+                        FROM functions 
+                        WHERE file_id = %s
+                        ORDER BY line_start
+                    """
+                    cursor.execute(sql, (file_id,))
+                    return cursor.fetchall()
+        except pymysql.Error as e:
+            logger.error(f"Error obteniendo funciones: {e}")
+            return []
+    
+    def get_classes(self, file_id: int) -> List[Dict[str, Any]]:
+        """Obtiene todas las clases de un archivo."""
+        try:
+            with self._get_connection() as conn:
+                with conn.cursor() as cursor:
+                    sql = """
+                        SELECT id, name, line_start, line_end, docstring, parent_class
+                        FROM classes 
+                        WHERE file_id = %s
+                        ORDER BY line_start
+                    """
+                    cursor.execute(sql, (file_id,))
+                    return cursor.fetchall()
+        except pymysql.Error as e:
+            logger.error(f"Error obteniendo clases: {e}")
             return []

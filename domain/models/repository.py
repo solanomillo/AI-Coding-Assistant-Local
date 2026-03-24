@@ -1,6 +1,5 @@
 """
 Modelos de dominio para repositorios y archivos de código.
-CORREGIDO: Agregado setter para relative_path
 """
 
 from dataclasses import dataclass, field
@@ -16,7 +15,7 @@ class Function:
     
     name: str
     line_start: int
-    line_end: int
+    line_end: int = 0
     docstring: Optional[str] = None
     complexity: int = 1
     decorators: List[str] = field(default_factory=list)
@@ -41,7 +40,7 @@ class Class:
     
     name: str
     line_start: int
-    line_end: int
+    line_end: int = 0
     docstring: Optional[str] = None
     parent_class: Optional[str] = None
     methods: List[Function] = field(default_factory=list)
@@ -56,7 +55,7 @@ class Class:
             'docstring': self.docstring,
             'parent_class': self.parent_class,
             'methods': [m.to_dict() for m in self.methods],
-            'decORAORS': self.decorators
+            'decorators': self.decorators
         }
 
 
@@ -72,7 +71,7 @@ class CodeFile:
     imports: List[str] = field(default_factory=list)
     content_hash: Optional[str] = None
     last_modified: Optional[datetime] = None
-    _relative_path: Optional[str] = None  # Campo privado para almacenar la ruta relativa
+    _relative_path: Optional[str] = None
     
     @property
     def name(self) -> str:
@@ -138,6 +137,8 @@ class Repository:
     total_lines: int = 0
     created_at: datetime = field(default_factory=datetime.now)
     last_analyzed: Optional[datetime] = None
+    metadata: Dict[str, Any] = field(default_factory=dict)
+    db_id: Optional[int] = None
     
     def add_file(self, file: CodeFile) -> None:
         """
@@ -160,7 +161,7 @@ class Repository:
         total_functions = sum(len(f.functions) for f in self.files)
         total_classes = sum(len(c.classes) for c in self.files)
         
-        return {
+        summary = {
             'name': self.name,
             'path': str(self.path),
             'language': self.language,
@@ -171,6 +172,11 @@ class Repository:
             'created_at': self.created_at.isoformat(),
             'last_analyzed': self.last_analyzed.isoformat() if self.last_analyzed else None
         }
+        
+        if self.metadata:
+            summary['metadata'] = self.metadata
+        
+        return summary
     
     def to_dict(self) -> Dict[str, Any]:
         """Convierte el repositorio a diccionario."""
@@ -182,5 +188,6 @@ class Repository:
             'file_count': self.file_count,
             'total_lines': self.total_lines,
             'created_at': self.created_at.isoformat(),
-            'last_analyzed': self.last_analyzed.isoformat() if self.last_analyzed else None
+            'last_analyzed': self.last_analyzed.isoformat() if self.last_analyzed else None,
+            'metadata': self.metadata
         }

@@ -30,7 +30,7 @@ class AgentWorkflow:
     Orquestador de agentes usando LangGraph.
     """
     
-    def __init__(self, rag_service: Optional[RAGGeminiService] = None):
+    def __init__(self, rag_service: Optional[RAGService] = None):
         """
         Inicializa el flujo de trabajo.
         """

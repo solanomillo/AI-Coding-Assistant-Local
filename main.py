@@ -15,6 +15,7 @@ import os
 from dotenv import load_dotenv
 from application.services.rag_gemini_service import RAGService
 from application.graph.workflow import AgentWorkflow
+
 # Cargar variables de entorno
 load_dotenv()
 
@@ -73,9 +74,7 @@ def setup_project_structure() -> None:
 
 
 def get_repo_name(repo: Union[Dict[str, Any], Any]) -> str:
-    """
-    Obtiene el nombre del repositorio de manera segura.
-    """
+    """Obtiene el nombre del repositorio de manera segura."""
     if isinstance(repo, dict):
         return repo.get('name', 'desconocido')
     else:
@@ -83,9 +82,7 @@ def get_repo_name(repo: Union[Dict[str, Any], Any]) -> str:
 
 
 def get_repo_file_count(repo: Union[Dict[str, Any], Any]) -> int:
-    """
-    Obtiene el número de archivos del repositorio de manera segura.
-    """
+    """Obtiene el número de archivos del repositorio de manera segura."""
     if isinstance(repo, dict):
         return repo.get('file_count', 0)
     else:
@@ -95,9 +92,7 @@ def get_repo_file_count(repo: Union[Dict[str, Any], Any]) -> int:
 
 
 def get_repo_total_lines(repo: Union[Dict[str, Any], Any]) -> int:
-    """
-    Obtiene el total de líneas del repositorio de manera segura.
-    """
+    """Obtiene el total de líneas del repositorio de manera segura."""
     if isinstance(repo, dict):
         return repo.get('total_lines', 0)
     else:
@@ -144,8 +139,8 @@ def initialize_session_state() -> None:
     if 'messages' not in st.session_state:
         st.session_state.messages = []
     
-    if 'selected_agent' not in st.session_state:
-        st.session_state.selected_agent = "auto"
+    if 'daily_limit_reached' not in st.session_state:
+        st.session_state.daily_limit_reached = False
 
 
 def show_welcome_page() -> None:
@@ -155,6 +150,10 @@ def show_welcome_page() -> None:
     st.title("🤖 AI Coding Assistant Local")
     st.markdown("---")
     
+    if st.session_state.get('daily_limit_reached', False):
+        st.error("⚠️ **Límite diario de API alcanzado**")
+        st.info("Las consultas estarán disponibles mañana. Puedes seguir usando repositorios ya indexados.")
+    
     col1, col2, col3 = st.columns(3)
     
     with col1:
@@ -162,7 +161,7 @@ def show_welcome_page() -> None:
         st.markdown("""
         - Carga repositorios vía ZIP o directorio local
         - Analiza estructura de código automáticamente
-        - Soporta **Python, JavaScript, HTML, CSS**
+        - Soporta **Python, JavaScript, TypeScript, HTML, CSS**
         - Extrae funciones, clases y metadatos
         """)
     
@@ -187,7 +186,6 @@ def show_welcome_page() -> None:
     
     st.markdown("---")
     
-    # Últimos repositorios
     st.subheader("📚 Últimos repositorios analizados")
     
     repos = st.session_state.repo_service.list_repositories()
@@ -220,43 +218,45 @@ def show_welcome_page() -> None:
                     st.write(f"🕐 {fecha}")
                 
                 with cols[4]:
-                    if st.button("Cargar", key=f"welcome_load_{repo['id']}"):                      
-                        
-                        path = Path(repo['path'])
-                        if path.exists():
-                            with st.spinner(f"Cargando repositorio {repo['name']}..."):
-                                try:
+                   if st.button("Cargar", key=f"welcome_load_{repo['id']}"):
+                        with st.spinner(f"Cargando repositorio {repo['name']}..."):
+                            try:
+                                # Reconstruir repositorio desde MySQL (sin regenerar embeddings)
+                                repo_obj = st.session_state.repo_service.load_repository_from_db(repo['id'])
+                                
+                                if repo_obj:                                   
+                                    
+                                    # Crear RAGService (usará FAISS existente, no regenerará embeddings)
                                     rag_service = RAGService(
-                                        repo_name=repo['name'],
-                                        repo_path=path,
+                                        repo_name=repo_obj.name,
+                                        repo_path=repo_obj.path,
                                         repo_id=repo['id'],
                                         prefer_pro=st.session_state.prefer_pro,
                                         max_file_size_mb=st.session_state.max_file_size_mb,
                                         include_docs=st.session_state.include_docs
                                     )
+                                    # NO llamar a index_repository() - usar vector store existente
                                     
                                     st.session_state.rag_service = rag_service
-                                    st.session_state.current_repo = repo
+                                    st.session_state.current_repo = repo_obj
                                     st.session_state.repository_loaded = True
                                     st.session_state.messages = []
                                     
-                                    # Inicializar agentes
                                     st.session_state.agent_workflow = AgentWorkflow(rag_service)
-                                    st.success(f"✅ Repositorio {repo['name']} cargado")
+                                    st.success(f"✅ Repositorio {repo['name']} cargado desde BD")
                                     st.success("🤖 Agentes LangGraph inicializados")
                                     st.rerun()
-                                except Exception as e:
-                                    st.error(f"❌ Error: {str(e)}")
-                        else:
-                            st.error(f"❌ Repositorio no encontrado en disco")
+                                else:
+                                    st.error("❌ Error cargando repositorio desde BD")
+                                    
+                            except Exception as e:
+                                st.error(f"❌ Error: {str(e)}")
                 
                 st.divider()
     else:
         st.info("👈 **Comienza cargando un repositorio** en la sección 'Cargar Repositorio'")
     
-    # Información del sistema
     with st.expander("📊 Información del Sistema", expanded=False):
-        # Estadísticas del caché
         try:
             cache_stats = st.session_state.repo_service.cache.get_stats()
             col1, col2, col3 = st.columns(3)
@@ -269,27 +269,23 @@ def show_welcome_page() -> None:
         except Exception as e:
             logger.debug(f"Error obteniendo estadísticas de caché: {e}")
         
-        # Lenguajes soportados
         st.markdown("**🌐 Lenguajes soportados:**")
         languages = ["Python", "JavaScript", "TypeScript", "HTML", "CSS", "SCSS", "JSON", "SQL", "Shell", "Go", "Rust", "Java", "C++", "Ruby", "PHP"]
         st.markdown(" | ".join(languages[:8]))
         st.markdown(" | ".join(languages[8:]))
         
-        # Información de embeddings
         st.markdown("**📐 Configuración de embeddings:**")
         st.markdown("- Modelo: Gemini Embedding-001")
         st.markdown("- Dimensión: 3072")
         st.markdown("- Fragmentos por archivo: 10")
         st.markdown("- Tamaño de fragmento: 500 caracteres")
         
-        # Agentes disponibles
         st.markdown("**🤖 Agentes disponibles:**")
-        st.markdown("- **Router Agent**: Clasifica y dirige consultas")
+        st.markdown("- **Router Agent**: Clasifica y dirige consultas automáticamente")
         st.markdown("- **Explain Agent**: Explica funciones y clases")
         st.markdown("- **Review Agent**: Revisa código y sugiere mejoras")
         st.markdown("- **Docs Agent**: Genera documentación automática")
         
-        # Estado de API
         api_key = os.getenv("GEMINI_API_KEY")
         if api_key:
             st.success("✅ Gemini API: Configurada")
@@ -303,10 +299,9 @@ def main() -> NoReturn:
     """
     logger.info("Iniciando AI Coding Assistant Local...")
     
-    # Verificar estructura del proyecto
     setup_project_structure()
     
-    # Configuración de página
+    # Configuración de página (SOLO UNA VEZ)
     st.set_page_config(
         page_title="AI Coding Assistant",
         page_icon="🤖",
@@ -314,27 +309,24 @@ def main() -> NoReturn:
         initial_sidebar_state="expanded"
     )
     
-    # Inicializar estado de sesión
     initialize_session_state()
     
-    # Barra lateral de navegación
+    # Barra lateral de navegación (SOLO AQUÍ)
     with st.sidebar:
         st.image("https://img.icons8.com/fluency/96/robot.png", width=80)
         st.title("🤖 AI Coding Assistant")
         
         st.markdown("---")
         
-        # Navegación
         st.subheader("📋 Navegación")
         page = st.radio(
             "Ir a:",
-            ["🏠 Inicio", "📤 Cargar Repositorio", "📊 Analizar", "💬 Chat con Agentes", "📚 Repositorios", "⚙️ Configuración"],
+            ["🏠 Inicio", "📤 Cargar Repositorio", "📊 Analizar", "💬 Chat", "📚 Repositorios", "⚙️ Configuración"],
             label_visibility="collapsed"
         )
         
         st.markdown("---")
         
-        # Estado del sistema
         st.subheader("📊 Estado")
         
         if 'current_repo' in st.session_state and st.session_state.current_repo:
@@ -350,12 +342,13 @@ def main() -> NoReturn:
             with col2:
                 st.metric("📊 Líneas", repo_lines)
             
-            # Mostrar estado de agentes
             if 'agent_workflow' in st.session_state and st.session_state.agent_workflow:
                 st.info("🤖 Agentes: Activos")
-                st.caption("Router | Explain | Review | Docs")
             else:
                 st.warning("🤖 Agentes: No inicializados")
+            
+            if st.session_state.get('daily_limit_reached', False):
+                st.warning("⚠️ Límite diario API alcanzado")
         else:
             st.warning("⏳ **Sin repositorio activo**")
         
@@ -364,27 +357,22 @@ def main() -> NoReturn:
         st.caption("Multi-lenguaje | Agentes LangGraph")
         st.caption("Dimensión embeddings: 3072")
     
-    # Mostrar página seleccionada
+    # Mostrar página seleccionada (importaciones dinámicas)
     if page == "🏠 Inicio":
         show_welcome_page()
-    
     elif page == "📤 Cargar Repositorio":
         from interface.streamlit.app import show_upload_section
         show_upload_section()
-    
     elif page == "📊 Analizar":
         from interface.streamlit.app import show_analysis_section
         show_analysis_section()
-    
-    elif page == "💬 Chat con Agentes":
+    elif page == "💬 Chat":
         from interface.streamlit.app import show_chat_section
         show_chat_section()
-    
     elif page == "📚 Repositorios":
         from interface.streamlit.app import show_repositories_list
         show_repositories_list()
-    
-    else:  # Configuración
+    else:
         from interface.streamlit.app import show_configuration_section
         show_configuration_section()
     
