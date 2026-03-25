@@ -107,25 +107,53 @@ class GeminiEmbedding:
     
     def generate_embeddings_batch(self, texts: List[str]) -> List[List[float]]:
         """
-        Genera embeddings para múltiples textos.
-        
-        Args:
-            texts: Lista de textos a convertir
-            
-        Returns:
-            Lista de embeddings
+        Genera embeddings en batch REAL (una sola llamada API).
         """
-        embeddings = []
-        for i, text in enumerate(texts):
-            try:
-                embedding = self.generate_embedding(text)
-                embeddings.append(embedding)
-            except Exception as e:
-                logger.error(f"Error en texto {i}: {text[:50]}... - {e}")
-                embeddings.append([0.0] * self.dimension)
-        
-        logger.info(f"Generados {len(embeddings)} embeddings en batch")
-        return embeddings
+        if not texts:
+            return []
+
+        clean_texts = []
+
+        for text in texts:
+            if not text or not isinstance(text, str):
+                clean_texts.append("")
+                continue
+
+            text = text.strip()
+
+            if len(text) > 2000:
+                text = text[:2000]
+
+            clean_texts.append(text)
+
+        try:
+            logger.info(f"Generando embeddings en batch: {len(clean_texts)} textos")
+
+            result = genai.embed_content(
+                model=self.model,
+                content=clean_texts,  
+                task_type="retrieval_document"
+            )
+
+            embeddings = result.get("embedding", [])
+
+            if not embeddings:
+                raise ValueError("No se recibieron embeddings")
+
+            valid_embeddings = []
+
+            for emb in embeddings:
+                if emb and len(emb) == self.dimension:
+                    valid_embeddings.append(emb)
+                else:
+                    valid_embeddings.append([0.0] * self.dimension)
+
+            return valid_embeddings
+
+        except Exception as e:
+            logger.error(f"Error en batch embedding: {e}")
+
+            return [[0.0] * self.dimension for _ in clean_texts]
     
     def get_dimension(self) -> int:
         """

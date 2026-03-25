@@ -68,12 +68,6 @@ def _setup_services(repo) -> tuple:
     """
     Configura los servicios para un repositorio.
     Retorna (success, rag_service, agent_workflow)
-    
-    Args:
-        repo: Repositorio (objeto con db_id)
-        
-    Returns:
-        Tupla (success, rag_service, agent_workflow)
     """
     if not ServiceFactory.is_api_key_valid():
         return False, None, None
@@ -92,12 +86,7 @@ def _setup_services(repo) -> tuple:
 
 
 def _show_repository_stats(repo) -> None:
-    """
-    Muestra estadísticas del repositorio.
-    
-    Args:
-        repo: Repositorio (objeto con files)
-    """
+    """Muestra estadísticas del repositorio."""
     col1, col2, col3 = st.columns(3)
     with col1:
         st.metric("📄 Archivos", len(repo.files))
@@ -109,32 +98,28 @@ def _show_repository_stats(repo) -> None:
         st.metric("📚 Clases", total_classes)
 
 
-def _show_indexing_stats(stats: Dict[str, Any], columns: int = 4) -> None:
+def _check_quota_and_display() -> bool:
     """
-    Muestra estadísticas de indexación de forma consistente.
-    
-    Args:
-        stats: Estadísticas del servicio RAG
-        columns: Número de columnas (3 o 4)
+    Verifica si el límite de API ha sido alcanzado y muestra mensaje.
+    Retorna True si el límite fue alcanzado.
     """
-    if columns == 4:
-        col1, col2, col3, col4 = st.columns(4)
-        with col1:
-            st.metric("🎯 Fragmentos", stats['processing_stats']['chunks_processed'])
-        with col2:
-            st.metric("📞 API Calls", stats['processing_stats']['api_calls'])
-        with col3:
-            st.metric("⚠️ Rate Limits", stats['processing_stats']['rate_limit_hits'])
-        with col4:
-            st.metric("📐 Dimensión", stats['embedding_dimension'])
-    else:
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            st.metric("🎯 Fragmentos", stats['processing_stats']['chunks_processed'])
-        with col2:
-            st.metric("📞 API Calls", stats['processing_stats']['api_calls'])
-        with col3:
-            st.metric("⚠️ Rate Limits", stats['processing_stats']['rate_limit_hits'])
+    if st.session_state.get('daily_limit_reached', False):
+        st.error("⚠️ **Límite diario de API alcanzado**")
+        st.info("""
+        Has superado el límite diario de solicitudes de Gemini API.
+        
+        **¿Qué puedes hacer?**
+        - Esperar hasta mañana para que se reinicie el contador
+        - Seguir usando repositorios ya indexados para consultas
+        - Las nuevas indexaciones no funcionarán hasta mañana
+        
+        **Límites del free tier:**
+        - 20 solicitudes de texto por minuto
+        - 100 solicitudes de embeddings por minuto
+        - 1500 solicitudes por día (aproximadamente)
+        """)
+        return True
+    return False
 
 
 def show_upload_section() -> None:
@@ -161,6 +146,9 @@ def show_upload_section() -> None:
         - Crea una nueva API key (es gratuita)
         """)
         return
+    
+    # Verificar límite diario
+    _check_quota_and_display()
     
     with st.expander("⚡ Optimizaciones activas", expanded=False):
         st.markdown("""
@@ -262,8 +250,6 @@ def show_upload_section() -> None:
                                             else:
                                                 st.warning("⚠️ **Agentes no inicializados**")
                                                 st.info("Los agentes requieren API key válida. Configúrala en Configuración.")
-                                            
-                                            _show_indexing_stats(rag_service.get_stats(), columns=4)
                                         else:
                                             st.error("❌ **Error en indexación**")
                                             
@@ -365,8 +351,6 @@ def show_upload_section() -> None:
                                             else:
                                                 st.warning("⚠️ **Agentes no inicializados**")
                                                 st.info("Los agentes requieren API key válida. Configúrala en Configuración.")
-                                            
-                                            _show_indexing_stats(rag_service.get_stats(), columns=3)
                                         else:
                                             st.error("❌ **Error en indexación**")
                                     except Exception as e:
@@ -387,7 +371,7 @@ def show_upload_section() -> None:
 
 
 def show_chat_section() -> None:
-    """Sección de chat con agentes LangGraph (selección automática)."""
+    """Sección de chat con agentes LangGraph y manejo de límite de API."""
     st.title("💬 Chat con Agentes IA")
     
     if 'current_repo' not in st.session_state or not st.session_state.current_repo:
@@ -405,9 +389,8 @@ def show_chat_section() -> None:
         st.info("Verifica que tu API key sea válida en la pestaña Configuración.")
         return
     
-    if st.session_state.get('daily_limit_reached', False):
-        st.error("⚠️ **Límite diario de API alcanzado**")
-        st.info("Las consultas que requieran la API no funcionarán hasta mañana. Puedes seguir usando repositorios ya indexados para consultas generales.")
+    # Verificar límite diario al inicio del chat
+    quota_exceeded = _check_quota_and_display()
     
     if "messages" not in st.session_state:
         st.session_state.messages = []
@@ -421,7 +404,7 @@ def show_chat_section() -> None:
                 with st.expander("📚 Fuentes consultadas"):
                     for source in message["sources"]:
                         st.write(f"**📄 {source['file']}**")
-                        st.code(source['preview'], language='python')
+                        
     
     if prompt := st.chat_input("💬 Pregunta sobre el código..."):
         st.session_state.messages.append({"role": "user", "content": prompt})
@@ -429,12 +412,25 @@ def show_chat_section() -> None:
             st.markdown(prompt)
         
         with st.chat_message("assistant"):
-            if st.session_state.get('daily_limit_reached', False):
-                st.warning("⚠️ **Límite diario de API alcanzado**")
-                st.info("Las consultas estarán disponibles mañana. Por favor, intenta nuevamente más tarde.")
+            # Verificar límite diario antes de procesar
+            if quota_exceeded or st.session_state.get('daily_limit_reached', False):
+                st.error("⚠️ **Límite diario de API alcanzado**")
+                st.info("""
+                Has superado el límite diario de solicitudes de Gemini API.
+                
+                **¿Qué puedes hacer?**
+                - Esperar hasta mañana para que se reinicie el contador
+                - Las consultas estarán disponibles nuevamente mañana
+                
+                **Mientras tanto:**
+                - Puedes seguir navegando por repositorios ya indexados
+                - Los análisis de código ya generados siguen disponibles
+                """)
+                response = "⚠️ **Límite diario de API alcanzado.** Las consultas estarán disponibles mañana. Por favor, intenta nuevamente más tarde."
+                st.markdown(response)
                 st.session_state.messages.append({
                     "role": "assistant",
-                    "content": "⚠️ **Límite diario de API alcanzado.** Las consultas estarán disponibles mañana. Por favor, intenta nuevamente más tarde.",
+                    "content": response,
                     "agent_used": "Sistema",
                     "sources": []
                 })
@@ -454,7 +450,6 @@ def show_chat_section() -> None:
                         with st.expander("📚 Fuentes consultadas"):
                             for source in sources[:3]:
                                 st.write(f"**📄 {source['file']}**")
-                                st.code(source['preview'], language='python')
                     
                     st.caption(f"🤖 Procesado por: **{agent_used}**")
                     
@@ -467,9 +462,21 @@ def show_chat_section() -> None:
                     
                 except Exception as e:
                     error_msg = str(e).lower()
-                    if 'quota' in error_msg or '429' in error_msg or 'rate limit' in error_msg:
+                    # Detectar error de cuota (429)
+                    if '429' in error_msg or 'quota' in error_msg or 'rate limit' in error_msg:
                         st.error("⚠️ **Límite de API alcanzado**")
-                        st.info("Has superado el límite diario de solicitudes. Las consultas estarán disponibles mañana.")
+                        st.info("""
+                        Has superado el límite diario de solicitudes de Gemini API.
+                        
+                        **¿Qué puedes hacer?**
+                        - Esperar hasta mañana para que se reinicie el contador (generalmente a las 00:00 PST)
+                        - Las consultas estarán disponibles nuevamente mañana
+                        
+                        **Límites del free tier:**
+                        - 20 solicitudes de texto por minuto
+                        - 100 solicitudes de embeddings por minuto
+                        - 1500 solicitudes por día (aproximadamente)
+                        """)
                         st.session_state.daily_limit_reached = True
                         response = "⚠️ **Límite diario de API alcanzado.** Las consultas estarán disponibles mañana. Por favor, intenta nuevamente más tarde."
                     else:
@@ -639,7 +646,6 @@ def show_repositories_list() -> None:
                 st.write(f"**{repo['name']}**")
                 path = Path(repo['path'])
                 if path.exists():
-                    # Verificar si es el original o copia
                     if "data/repositories" in str(path):
                         st.caption(f"📁 Copia en caché")
                     else:
@@ -659,13 +665,11 @@ def show_repositories_list() -> None:
                     fecha = str(created_at)[:10]
                 st.write(f"🕐 {fecha}")
             with cols[4]:
-                # Botón de eliminar directo
                 if st.button("🗑️ Eliminar", key=f"delete_{repo['id']}", help="Eliminar repositorio del sistema"):
                     with st.spinner(f"Eliminando repositorio {repo['name']}..."):
                         success = st.session_state.repo_service.delete_repository(repo['id'])
                         if success:
                             st.success(f"✅ Repositorio '{repo['name']}' eliminado del sistema")
-                            # Limpiar estado si era el repositorio actual
                             if 'current_repo' in st.session_state and st.session_state.current_repo:
                                 if hasattr(st.session_state.current_repo, 'name') and \
                                    st.session_state.current_repo.name == repo['name']:
