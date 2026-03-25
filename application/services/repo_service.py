@@ -126,7 +126,6 @@ class RepositoryService:
     def _is_django_project(self, directory: Path) -> bool:
         """
         Detecta si el repositorio es un proyecto Django.
-        Requiere al menos 2 indicadores fuertes o 1 fuerte + 2 débiles.
         """
         strong_indicators = {
             'manage.py': False,
@@ -165,10 +164,6 @@ class RepositoryService:
             is_django = True
             logger.info(f"Proyecto Django detectado por combinación: 1 fuerte + {weak_count} débiles")
         
-        if is_django:
-            logger.info(f"  Indicadores fuertes: {[k for k, v in strong_indicators.items() if v]}")
-            logger.info(f"  Indicadores débiles: {[k for k, v in weak_indicators.items() if v >= 2]}")
-        
         return is_django
     
     def _should_ignore_file(self, file_path: Path) -> bool:
@@ -178,22 +173,17 @@ class RepositoryService:
         
         for ignore_dir in self.ignore_dirs:
             if ignore_dir in file_path.parts:
-                logger.debug(f"Ignorando archivo en directorio {ignore_dir}: {file_name}")
                 return True
         
         if file_name in self.ignore_files:
-            logger.debug(f"Ignorando archivo por nombre: {file_name}")
             return True
         
         for pattern in self.ignore_patterns:
             if pattern.startswith('*') and file_name.endswith(pattern[1:]):
-                logger.debug(f"Ignorando archivo por patrón {pattern}: {file_name}")
                 return True
             elif pattern.endswith('*') and file_name.startswith(pattern[:-1]):
-                logger.debug(f"Ignorando archivo por patrón {pattern}: {file_name}")
                 return True
             elif pattern in file_str:
-                logger.debug(f"Ignorando archivo por patrón {pattern}: {file_name}")
                 return True
         
         return False
@@ -211,7 +201,6 @@ class RepositoryService:
         try:
             line_count = sum(1 for _ in open(file_path, 'r', encoding='utf-8', errors='ignore'))
             if line_count > 2000:
-                logger.debug(f"Archivo ignorado por líneas: {file_path.name} ({line_count})")
                 return False
         except Exception:
             pass
@@ -250,7 +239,14 @@ class RepositoryService:
                 shutil.rmtree(temp_dir)
                 return self.load_repository_from_db(existing['id'])
             
-            # ANALIZAR sin guardar primero
+            # 🔥 PRIMERO VERIFICAR API ANTES DE ANALIZAR
+            from application.services.service_factory import ServiceFactory
+            if not ServiceFactory.is_api_key_valid():
+                logger.warning("API Key no configurada - repositorio no procesado")
+                shutil.rmtree(temp_dir)
+                return None
+            
+            # ANALIZAR
             repository = self._analyze_directory(final_path, repo_name)
             
             if not repository or not repository.files:
@@ -258,14 +254,7 @@ class RepositoryService:
                 shutil.rmtree(temp_dir)
                 return None
             
-            # VERIFICAR API KEY ANTES DE GUARDAR
-            from application.services.service_factory import ServiceFactory
-            if not ServiceFactory.is_api_key_valid():
-                logger.warning("API Key no configurada - repositorio no guardado")
-                repository._skip_save = True
-                return repository
-            
-            # Guardar en BD solo si API está disponible
+            # Guardar en BD
             repo_id = self.db.save_repository(repository)
             repository.db_id = repo_id
             logger.info(f"Repositorio guardado en BD con ID: {repo_id}")
@@ -294,6 +283,12 @@ class RepositoryService:
             logger.info(f"Repositorio ya existe en BD con ID: {existing['id']}")
             return self.load_repository_from_db(existing['id'])
         
+        # 🔥 PRIMERO VERIFICAR API ANTES DE ANALIZAR
+        from application.services.service_factory import ServiceFactory
+        if not ServiceFactory.is_api_key_valid():
+            logger.warning("API Key no configurada - repositorio no procesado")
+            return None
+        
         repo_name = directory_path.name
         logger.info(f"Cargando desde directorio: {directory_path}")
         
@@ -304,14 +299,7 @@ class RepositoryService:
             logger.error("No se encontraron archivos válidos")
             return None
         
-        # VERIFICAR API KEY ANTES DE GUARDAR
-        from application.services.service_factory import ServiceFactory
-        if not ServiceFactory.is_api_key_valid():
-            logger.warning("API Key no configurada - repositorio no guardado")
-            repository._skip_save = True
-            return repository
-        
-        # Guardar en BD solo si API está disponible
+        # Guardar en BD
         repo_id = self.db.save_repository(repository)
         repository.db_id = repo_id
         logger.info(f"Repositorio guardado en BD con ID: {repo_id}")
@@ -350,7 +338,6 @@ class RepositoryService:
                 file_path = repo_path / file_data['file_path']
                 
                 if not file_path.exists():
-                    logger.debug(f"Archivo no encontrado en disco: {file_path}")
                     continue
                 
                 try:
@@ -420,13 +407,6 @@ class RepositoryService:
     def _analyze_directory(self, directory_path: Path, repo_name: str) -> Repository:
         """
         Analiza directorio con procesamiento optimizado.
-        
-        Args:
-            directory_path: Ruta al directorio
-            repo_name: Nombre del repositorio
-            
-        Returns:
-            Repositorio analizado
         """
         logger.info(f"Analizando directorio: {directory_path}")
         
@@ -486,7 +466,6 @@ class RepositoryService:
             logger.info(f"  Modelos: {models_count}")
             logger.info(f"  Vistas: {views_count}")
             logger.info(f"  URLs: {urls_count}")
-            logger.info(f"  Migraciones ignoradas: si")
         
         return repository
     
@@ -599,10 +578,7 @@ class RepositoryService:
         return self.db.list_repositories()
     
     def _delete_directory_with_retry(self, path: Path, max_retries: int = 3) -> bool:
-        """
-        Elimina un directorio manejando archivos de solo lectura.
-        Solo se usa para eliminar copias en data/repositories/.
-        """
+        """Elimina un directorio manejando archivos de solo lectura."""
         if not path.exists():
             return True
         
