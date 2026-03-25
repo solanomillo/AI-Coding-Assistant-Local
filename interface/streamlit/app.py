@@ -13,6 +13,8 @@ from typing import Union, Dict, Any, List
 
 from application.services.repo_service import RepositoryService
 from application.services.service_factory import ServiceFactory
+from application.graph.workflow import AgentWorkflow
+from infrastructure.llm_clients.gemini_llm import GeminiLLM
 
 logger = logging.getLogger(__name__)
 
@@ -123,7 +125,7 @@ def _check_quota_and_display() -> bool:
 
 
 def show_upload_section() -> None:
-    """Sección de carga con verificación de duplicados."""
+    """Sección de carga con verificación de duplicados y API."""
     st.title("📤 Cargar Repositorio")
     
     if 'repo_service' not in st.session_state:
@@ -188,13 +190,28 @@ def show_upload_section() -> None:
                     repo = st.session_state.repo_service.load_from_zip(tmp_path)
                     
                     if repo:
+                        # Verificar si se guardó en BD o solo se analizó
+                        if hasattr(repo, '_skip_save') and repo._skip_save:
+                            st.warning("⚠️ **Repositorio analizado pero NO indexado**")
+                            st.info("""
+                            No se pudo indexar el repositorio porque:
+                            - La API key no está configurada, o
+                            - El límite diario de API ha sido alcanzado
+                            
+                            **¿Qué puedes hacer?**
+                            - Configurar tu API key en Configuración
+                            - Esperar hasta mañana si se alcanzó el límite
+                            - Volver a cargar el repositorio después
+                            """)
+                            _show_repository_stats(repo)
+                            return
+                        
                         if hasattr(repo, 'db_id') and repo.db_id:
                             # Verificar si ya tiene vectores
                             safe_name = repo.name.replace(' ', '_').replace('/', '_').replace('\\', '_')
                             index_path = Path(f"data/vectors/{safe_name}.index")
                             
                             if index_path.exists():
-                                # Repositorio ya indexado
                                 st.warning("⚠️ **Repositorio ya existente**")
                                 st.info(f"El repositorio '{repo.name}' ya estaba indexado. Se ha cargado desde la base de datos.")
                                 st.info(f"📁 Ruta: {repo.path}")
@@ -214,10 +231,15 @@ def show_upload_section() -> None:
                                     st.error("❌ **Error al configurar los servicios**")
                                     st.info("Verifica que tu API key sea válida y que tengas conexión a internet.")
                             else:
-                                # Repositorio recién guardado en BD pero sin vectores - hay que indexar
                                 st.success(f"✅ **Repositorio '{repo.name}' procesado correctamente**")
                                 
                                 _show_repository_stats(repo)
+                                
+                                # Verificar límite diario antes de indexar
+                                if st.session_state.get('daily_limit_reached', False):
+                                    st.warning("⚠️ **Límite diario de API alcanzado**")
+                                    st.info("No se puede indexar el repositorio hasta mañana. El repositorio ha sido guardado pero no indexado.")
+                                    return
                                 
                                 with st.spinner("🧠 Indexando con Gemini + FAISS..."):
                                     try:
@@ -289,13 +311,26 @@ def show_upload_section() -> None:
                     repo = st.session_state.repo_service.load_from_directory(path)
                     
                     if repo:
+                        if hasattr(repo, '_skip_save') and repo._skip_save:
+                            st.warning("⚠️ **Repositorio analizado pero NO indexado**")
+                            st.info("""
+                            No se pudo indexar el repositorio porque:
+                            - La API key no está configurada, o
+                            - El límite diario de API ha sido alcanzado
+                            
+                            **¿Qué puedes hacer?**
+                            - Configurar tu API key en Configuración
+                            - Esperar hasta mañana si se alcanzó el límite
+                            - Volver a cargar el repositorio después
+                            """)
+                            _show_repository_stats(repo)
+                            return
+                        
                         if hasattr(repo, 'db_id') and repo.db_id:
-                            # Verificar si ya tiene vectores
                             safe_name = repo.name.replace(' ', '_').replace('/', '_').replace('\\', '_')
                             index_path = Path(f"data/vectors/{safe_name}.index")
                             
                             if index_path.exists():
-                                # Repositorio ya indexado
                                 st.warning("⚠️ **Repositorio ya existente**")
                                 st.info(f"El repositorio '{repo.name}' ya estaba indexado. Se ha cargado desde la base de datos.")
                                 st.info(f"📁 Ruta: {repo.path}")
@@ -315,10 +350,14 @@ def show_upload_section() -> None:
                                     st.error("❌ **Error al configurar los servicios**")
                                     st.info("Verifica que tu API key sea válida y que tengas conexión a internet.")
                             else:
-                                # Repositorio recién guardado sin vectores
                                 st.success(f"✅ **Repositorio '{repo.name}' procesado correctamente**")
                                 
                                 _show_repository_stats(repo)
+                                
+                                if st.session_state.get('daily_limit_reached', False):
+                                    st.warning("⚠️ **Límite diario de API alcanzado**")
+                                    st.info("No se puede indexar el repositorio hasta mañana. El repositorio ha sido guardado pero no indexado.")
+                                    return
                                 
                                 with st.spinner("🧠 Indexando con Gemini..."):
                                     try:
@@ -403,8 +442,7 @@ def show_chat_section() -> None:
             if "sources" in message and message["sources"]:
                 with st.expander("📚 Fuentes consultadas"):
                     for source in message["sources"]:
-                        st.write(f"**📄 {source['file']}**")
-                        
+                        st.write(f"📄 **{source['file']}**")
     
     if prompt := st.chat_input("💬 Pregunta sobre el código..."):
         st.session_state.messages.append({"role": "user", "content": prompt})
@@ -448,8 +486,8 @@ def show_chat_section() -> None:
                     
                     if sources:
                         with st.expander("📚 Fuentes consultadas"):
-                            for source in sources[:3]:
-                                st.write(f"**📄 {source['file']}**")
+                            for source in sources[:5]:
+                                st.write(f"📄 **{source['file']}**")
                     
                     st.caption(f"🤖 Procesado por: **{agent_used}**")
                     
@@ -462,7 +500,6 @@ def show_chat_section() -> None:
                     
                 except Exception as e:
                     error_msg = str(e).lower()
-                    # Detectar error de cuota (429)
                     if '429' in error_msg or 'quota' in error_msg or 'rate limit' in error_msg:
                         st.error("⚠️ **Límite de API alcanzado**")
                         st.info("""
@@ -621,7 +658,6 @@ def show_repositories_list() -> None:
         st.info("👉 Ve a la pestaña **Cargar Repositorio** para comenzar")
         return
     
-    # Información sobre eliminación
     with st.expander("ℹ️ Información sobre eliminación", expanded=False):
         st.markdown("""
         **Al eliminar un repositorio se elimina:**

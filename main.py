@@ -13,7 +13,6 @@ import streamlit as st
 from datetime import datetime
 import os
 from dotenv import load_dotenv
-from application.services.service_factory import ServiceFactory
 
 # Cargar variables de entorno
 load_dotenv()
@@ -218,34 +217,36 @@ def show_welcome_page() -> None:
                 
                 with cols[4]:
                     if st.button("Cargar", key=f"welcome_load_{repo['id']}"):
-                        with st.spinner(f"Cargando repositorio {repo['name']}..."):
-                            try:
-                                                               
-                                repo_obj = st.session_state.repo_service.load_repository_from_db(repo['id'])
-                                
-                                if repo_obj:
-                                    rag_service, agent_workflow = ServiceFactory.setup_repository_services(
-                                        repo=repo_obj,
+                        from application.services.rag_gemini_service import RAGGeminiService
+                        from application.graph.workflow import AgentWorkflow
+                        
+                        path = Path(repo['path'])
+                        if path.exists():
+                            with st.spinner(f"Cargando repositorio {repo['name']}..."):
+                                try:
+                                    rag_service = RAGGeminiService(
+                                        repo_name=repo['name'],
+                                        repo_path=path,
+                                        repo_id=repo['id'],
                                         prefer_pro=st.session_state.prefer_pro,
                                         max_file_size_mb=st.session_state.max_file_size_mb,
                                         include_docs=st.session_state.include_docs
                                     )
                                     
                                     st.session_state.rag_service = rag_service
-                                    st.session_state.agent_workflow = agent_workflow
-                                    st.session_state.current_repo = repo_obj
+                                    st.session_state.current_repo = repo
                                     st.session_state.repository_loaded = True
                                     st.session_state.messages = []
                                     
-                                    st.success(f"✅ Repositorio {repo['name']} cargado desde BD")
+                                    st.session_state.agent_workflow = AgentWorkflow(rag_service)
+                                    st.success(f"✅ Repositorio {repo['name']} cargado")
                                     st.success("🤖 Agentes LangGraph inicializados")
                                     st.rerun()
-                                else:
-                                    st.error("❌ Error cargando repositorio desde BD")
-                                    
-                            except Exception as e:
-                                st.error(f"❌ Error: {str(e)}")
-                                    
+                                except Exception as e:
+                                    st.error(f"❌ Error: {str(e)}")
+                        else:
+                            st.error(f"❌ Repositorio no encontrado en disco")
+                
                 st.divider()
     else:
         st.info("👈 **Comienza cargando un repositorio** en la sección 'Cargar Repositorio'")
@@ -295,7 +296,6 @@ def main() -> NoReturn:
     
     setup_project_structure()
     
-    # Configuración de página (SOLO UNA VEZ)
     st.set_page_config(
         page_title="AI Coding Assistant",
         page_icon="🤖",
@@ -305,7 +305,6 @@ def main() -> NoReturn:
     
     initialize_session_state()
     
-    # Barra lateral de navegación (SOLO AQUÍ)
     with st.sidebar:
         st.image("https://img.icons8.com/fluency/96/robot.png", width=80)
         st.title("🤖 AI Coding Assistant")
@@ -351,7 +350,6 @@ def main() -> NoReturn:
         st.caption("Multi-lenguaje | Agentes LangGraph")
         st.caption("Dimensión embeddings: 3072")
     
-    # Mostrar página seleccionada (importaciones dinámicas)
     if page == "🏠 Inicio":
         show_welcome_page()
     elif page == "📤 Cargar Repositorio":

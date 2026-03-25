@@ -2,6 +2,7 @@ import logging
 import time
 from typing import List, Dict, Any
 from pathlib import Path
+
 from infrastructure.embeddings.gemini_embedding import GeminiEmbedding
 from infrastructure.vector_db.faiss_store import FAISSStore
 from infrastructure.llm_clients.gemini_llm import GeminiLLM
@@ -40,6 +41,9 @@ class RAGService:
         self.cache = CacheService()
 
         self.embedding_dimension = self.embedding.get_dimension()
+        
+        # Flag para límite diario
+        self._daily_limit_reached = False
 
         safe_name = repo_name.replace(" ", "_")
         index_path = Path(f"data/vectors/{safe_name}.index")
@@ -186,6 +190,13 @@ class RAGService:
     # -------------------------
     def query(self, question: str, k: int = 5, include_sources: bool = True) -> Dict[str, Any]:
         try:
+            # Verificar si ya hay límite alcanzado
+            if self._daily_limit_reached:
+                return {
+                    "answer": "⚠️ **Límite diario de API alcanzado.** Las consultas estarán disponibles mañana. Por favor, intenta nuevamente más tarde.",
+                    "sources": []
+                }
+            
             query_vector = self.embedding.generate_embedding(question)
 
             results = self.vector_store.search(query_vector, k=k)
@@ -201,8 +212,6 @@ class RAGService:
                 content = self.cache.get_chunk(chunk_id)
                 if content:
                     fragments.append(content)
-                    # Extraer nombre del archivo del ID
-                    # Formato: repo_id:ruta:indice
                     parts = chunk_id.split(":")
                     file_name = parts[1] if len(parts) > 1 else "desconocido"
                     
@@ -222,16 +231,27 @@ class RAGService:
                     """
 
             answer = self.llm.generate(prompt)
-
+            
             return {
                 "answer": answer,
                 "sources": sources if include_sources else []
             }
 
         except Exception as e:
+            error_msg = str(e).lower()
+            
+            # Detectar error de cuota (429)
+            if '429' in error_msg or 'quota' in error_msg or 'rate limit' in error_msg:
+                logger.warning(f"Límite de API alcanzado: {e}")
+                self._daily_limit_reached = True
+                return {
+                    "answer": "⚠️ **Límite diario de API alcanzado.** Las consultas estarán disponibles mañana. Por favor, intenta nuevamente más tarde.",
+                    "sources": []
+                }
+            
             logger.error(f"Error en query: {e}")
             return {
-                "answer": f"Error: {e}",
+                "answer": f"**Error:** {str(e)}",
                 "sources": []
             }
 
@@ -239,5 +259,6 @@ class RAGService:
         """Retorna estadísticas del servicio."""
         return {
             'processing_stats': self.stats,
-            'embedding_dimension': self.embedding_dimension
+            'embedding_dimension': self.embedding_dimension,
+            'daily_limit_reached': self._daily_limit_reached
         }

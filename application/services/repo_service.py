@@ -127,14 +127,7 @@ class RepositoryService:
         """
         Detecta si el repositorio es un proyecto Django.
         Requiere al menos 2 indicadores fuertes o 1 fuerte + 2 débiles.
-        
-        Args:
-            directory: Directorio del repositorio
-            
-        Returns:
-            True si es proyecto Django
         """
-        # Indicadores fuertes de Django (archivos característicos)
         strong_indicators = {
             'manage.py': False,
             'settings.py': False,
@@ -142,7 +135,6 @@ class RepositoryService:
             'asgi.py': False
         }
         
-        # Indicadores débiles (pueden aparecer en otros proyectos)
         weak_indicators = {
             'urls.py': 0,
             'models.py': 0,
@@ -151,9 +143,7 @@ class RepositoryService:
             'apps.py': 0
         }
         
-        # Buscar archivos en el directorio
         for root, dirs, files in os.walk(directory):
-            # Ignorar directorios comunes
             if any(ignore in root for ignore in ['venv', 'env', '.venv', '__pycache__', 'migrations']):
                 continue
             
@@ -163,15 +153,9 @@ class RepositoryService:
                 elif file in weak_indicators:
                     weak_indicators[file] += 1
         
-        # Contar indicadores fuertes
         strong_count = sum(1 for v in strong_indicators.values() if v)
-        
-        # Contar indicadores débiles (al menos 2 ocurrencias para contar)
         weak_count = sum(1 for v in weak_indicators.values() if v >= 2)
         
-        # Criterios para considerar proyecto Django:
-        # 1. Al menos 2 indicadores fuertes, o
-        # 2. 1 indicador fuerte + 2 indicadores débiles
         is_django = False
         
         if strong_count >= 2:
@@ -182,36 +166,25 @@ class RepositoryService:
             logger.info(f"Proyecto Django detectado por combinación: 1 fuerte + {weak_count} débiles")
         
         if is_django:
-            logger.info(f"  Indicadores fuertes encontrados: {[k for k, v in strong_indicators.items() if v]}")
-            logger.info(f"  Indicadores débiles encontrados: {[k for k, v in weak_indicators.items() if v >= 2]}")
+            logger.info(f"  Indicadores fuertes: {[k for k, v in strong_indicators.items() if v]}")
+            logger.info(f"  Indicadores débiles: {[k for k, v in weak_indicators.items() if v >= 2]}")
         
         return is_django
     
     def _should_ignore_file(self, file_path: Path) -> bool:
-        """
-        Determina si un archivo debe ser ignorado.
-        
-        Args:
-            file_path: Ruta del archivo
-            
-        Returns:
-            True si debe ser ignorado
-        """
+        """Determina si un archivo debe ser ignorado."""
         file_name = file_path.name
         file_str = str(file_path)
         
-        # Verificar directorios a ignorar
         for ignore_dir in self.ignore_dirs:
             if ignore_dir in file_path.parts:
                 logger.debug(f"Ignorando archivo en directorio {ignore_dir}: {file_name}")
                 return True
         
-        # Verificar nombre exacto
         if file_name in self.ignore_files:
             logger.debug(f"Ignorando archivo por nombre: {file_name}")
             return True
         
-        # Verificar patrones
         for pattern in self.ignore_patterns:
             if pattern.startswith('*') and file_name.endswith(pattern[1:]):
                 logger.debug(f"Ignorando archivo por patrón {pattern}: {file_name}")
@@ -226,26 +199,15 @@ class RepositoryService:
         return False
     
     def _is_valid_file(self, file_path: Path) -> bool:
-        """
-        Verifica si un archivo es válido para indexación.
-        
-        Args:
-            file_path: Ruta del archivo
-            
-        Returns:
-            True si es válido
-        """
+        """Verifica si un archivo es válido para indexación."""
         ext = file_path.suffix.lower()
         
-        # Verificar extensión
         if ext not in self.parsers:
             return False
         
-        # Verificar si debe ser ignorado
         if self._should_ignore_file(file_path):
             return False
         
-        # Verificar tamaño aproximado (líneas)
         try:
             line_count = sum(1 for _ in open(file_path, 'r', encoding='utf-8', errors='ignore'))
             if line_count > 2000:
@@ -259,13 +221,7 @@ class RepositoryService:
     def load_from_zip(self, zip_path: Union[str, Path]) -> Optional[Repository]:
         """
         Carga repositorio desde ZIP.
-        Verifica si ya existe antes de procesar.
-        
-        Args:
-            zip_path: Ruta al archivo ZIP
-            
-        Returns:
-            Repositorio analizado
+        Verifica API antes de guardar.
         """
         zip_path = Path(zip_path)
         if not zip_path.exists():
@@ -291,22 +247,30 @@ class RepositoryService:
             existing = self.db.get_repository_by_path(str(final_path))
             if existing:
                 logger.info(f"Repositorio ya existe en BD con ID: {existing['id']}")
-                # Limpiar directorio temporal
                 shutil.rmtree(temp_dir)
-                # Retornar el repositorio existente reconstruido
                 return self.load_repository_from_db(existing['id'])
             
+            # ANALIZAR sin guardar primero
             repository = self._analyze_directory(final_path, repo_name)
             
-            if repository and repository.files:
-                repo_id = self.db.save_repository(repository)
-                repository.db_id = repo_id
-                logger.info(f"Repositorio procesado: {len(repository.files)} archivos")
-                return repository
-            else:
+            if not repository or not repository.files:
                 logger.error("No se encontraron archivos válidos")
                 shutil.rmtree(temp_dir)
                 return None
+            
+            # VERIFICAR API KEY ANTES DE GUARDAR
+            from application.services.service_factory import ServiceFactory
+            if not ServiceFactory.is_api_key_valid():
+                logger.warning("API Key no configurada - repositorio no guardado")
+                repository._skip_save = True
+                return repository
+            
+            # Guardar en BD solo si API está disponible
+            repo_id = self.db.save_repository(repository)
+            repository.db_id = repo_id
+            logger.info(f"Repositorio guardado en BD con ID: {repo_id}")
+            
+            return repository
                 
         except Exception as e:
             logger.error(f"Error procesando ZIP: {e}")
@@ -317,13 +281,7 @@ class RepositoryService:
     def load_from_directory(self, directory_path: Union[str, Path]) -> Optional[Repository]:
         """
         Carga repositorio desde directorio local.
-        Verifica si ya existe antes de procesar.
-        
-        Args:
-            directory_path: Ruta al directorio
-            
-        Returns:
-            Repositorio analizado o None
+        Verifica API antes de guardar.
         """
         directory_path = Path(directory_path)
         if not directory_path.exists() or not directory_path.is_dir():
@@ -334,35 +292,37 @@ class RepositoryService:
         existing = self.db.get_repository_by_path(str(directory_path))
         if existing:
             logger.info(f"Repositorio ya existe en BD con ID: {existing['id']}")
-            # Retornar el repositorio existente reconstruido
             return self.load_repository_from_db(existing['id'])
         
         repo_name = directory_path.name
         logger.info(f"Cargando desde directorio: {directory_path}")
         
+        # ANALIZAR
         repository = self._analyze_directory(directory_path, repo_name)
         
-        if repository and repository.files:
-            repo_id = self.db.save_repository(repository)
-            repository.db_id = repo_id
-            return repository
-        else:
+        if not repository or not repository.files:
             logger.error("No se encontraron archivos válidos")
             return None
+        
+        # VERIFICAR API KEY ANTES DE GUARDAR
+        from application.services.service_factory import ServiceFactory
+        if not ServiceFactory.is_api_key_valid():
+            logger.warning("API Key no configurada - repositorio no guardado")
+            repository._skip_save = True
+            return repository
+        
+        # Guardar en BD solo si API está disponible
+        repo_id = self.db.save_repository(repository)
+        repository.db_id = repo_id
+        logger.info(f"Repositorio guardado en BD con ID: {repo_id}")
+        
+        return repository
     
     def load_repository_from_db(self, repo_id: int) -> Optional[Repository]:
         """
         Carga un repositorio completo desde la base de datos y archivos en disco.
-        No genera nuevos embeddings, solo reconstruye desde datos existentes.
-        
-        Args:
-            repo_id: ID del repositorio en MySQL
-            
-        Returns:
-            Repositorio reconstruido o None
         """
         try:
-            # Obtener metadatos del repositorio
             repo_data = self.db.get_repository(repo_id)
             if not repo_data:
                 logger.error(f"Repositorio no encontrado: {repo_id}")
@@ -373,7 +333,6 @@ class RepositoryService:
                 logger.error(f"Ruta de repositorio no existe: {repo_path}")
                 return None
             
-            # Crear repositorio con metadatos
             repository = Repository(
                 name=repo_data['name'],
                 path=repo_path,
@@ -385,10 +344,8 @@ class RepositoryService:
             )
             repository.db_id = repo_id
             
-            # Obtener archivos de la base de datos
             files_data = self.db.get_files(repo_id)
             
-            # Reconstruir cada archivo
             for file_data in files_data:
                 file_path = repo_path / file_data['file_path']
                 
@@ -396,14 +353,12 @@ class RepositoryService:
                     logger.debug(f"Archivo no encontrado en disco: {file_path}")
                     continue
                 
-                # Leer contenido del archivo
                 try:
                     content = file_path.read_text(encoding='utf-8', errors='ignore')
                 except Exception as e:
                     logger.error(f"Error leyendo archivo {file_path}: {e}")
                     continue
                 
-                # Crear CodeFile
                 code_file = CodeFile(
                     path=file_path,
                     extension=file_data['extension'],
@@ -412,7 +367,6 @@ class RepositoryService:
                 )
                 code_file.relative_path = file_data['file_path']
                 
-                # Obtener funciones del archivo
                 functions = self.db.get_functions(file_data['id'])
                 for func_data in functions:
                     code_file.functions.append(Function(
@@ -423,7 +377,6 @@ class RepositoryService:
                         complexity=func_data['complexity']
                     ))
                 
-                # Obtener clases del archivo
                 classes = self.db.get_classes(file_data['id'])
                 for cls_data in classes:
                     class_obj = Class(
@@ -445,15 +398,7 @@ class RepositoryService:
             return None
     
     def _detect_repo_root(self, extracted_path: Path) -> Path:
-        """
-        Detecta la raíz real del repositorio.
-        
-        Args:
-            extracted_path: Ruta de extracción
-            
-        Returns:
-            Ruta real de la raíz
-        """
+        """Detecta la raíz real del repositorio."""
         items = list(extracted_path.iterdir())
         
         if len(items) == 1 and items[0].is_dir():
@@ -485,7 +430,6 @@ class RepositoryService:
         """
         logger.info(f"Analizando directorio: {directory_path}")
         
-        # Detectar si es proyecto Django
         is_django = self._is_django_project(directory_path)
         
         repository = Repository(
@@ -494,7 +438,6 @@ class RepositoryService:
             language="django" if is_django else "multi"
         )
         
-        # Guardar metadata adicional si es Django
         if is_django:
             repository.metadata = {
                 'framework': 'django',
@@ -502,7 +445,6 @@ class RepositoryService:
             }
             self.stats['django_projects'] += 1
         
-        # Escanear archivos por extensión
         files_by_extension = self._scan_files_by_extension(directory_path)
         
         total_files = sum(len(files) for files in files_by_extension.values())
@@ -523,7 +465,6 @@ class RepositoryService:
                         continue
                     
                     content = file_path.read_text(encoding='utf-8', errors='ignore')
-                    
                     parsed = parser.parse_file(file_path, content)
                     
                     if parsed:
@@ -536,7 +477,6 @@ class RepositoryService:
         
         logger.info(f"Archivos parseados: {files_parsed}/{total_files}")
         
-        # Si es Django, loguear información adicional
         if is_django:
             models_count = len([f for f in repository.files if 'models.py' in f.name])
             views_count = len([f for f in repository.files if 'views.py' in f.name])
@@ -551,16 +491,7 @@ class RepositoryService:
         return repository
     
     def _scan_files_by_extension(self, directory: Path) -> Dict[str, List[Path]]:
-        """
-        Escanea archivos agrupados por extensión.
-        Ignora directorios no deseados.
-        
-        Args:
-            directory: Directorio a escanear
-            
-        Returns:
-            Diccionario extensión -> lista de archivos
-        """
+        """Escanea archivos agrupados por extensión."""
         files_by_ext = {}
         
         for ext in self.parsers.keys():
@@ -570,7 +501,6 @@ class RepositoryService:
             if not file_path.is_file():
                 continue
             
-            # Ignorar archivos no deseados
             if self._should_ignore_file(file_path):
                 continue
             
@@ -581,18 +511,7 @@ class RepositoryService:
         return files_by_ext
     
     def _create_code_file(self, file_path: Path, content: str, parsed: Dict[str, Any], base_dir: Path) -> CodeFile:
-        """
-        Crea objeto CodeFile a partir de datos parseados.
-        
-        Args:
-            file_path: Ruta del archivo
-            content: Contenido del archivo
-            parsed: Datos parseados
-            base_dir: Directorio base para ruta relativa
-            
-        Returns:
-            CodeFile listo para usar
-        """
+        """Crea objeto CodeFile a partir de datos parseados."""
         code_file = CodeFile(
             path=file_path,
             extension=file_path.suffix,
@@ -600,14 +519,12 @@ class RepositoryService:
             content_hash=hashlib.sha256(content.encode()).hexdigest()[:16]
         )
         
-        # Establecer ruta relativa
         try:
             rel_path = file_path.relative_to(base_dir)
             code_file.relative_path = str(rel_path)
         except ValueError:
             code_file.relative_path = file_path.name
         
-        # Agregar funciones
         if 'functions' in parsed:
             for func in parsed['functions']:
                 try:
@@ -615,7 +532,6 @@ class RepositoryService:
                 except Exception as e:
                     logger.debug(f"Error creando función {func.get('name', 'unknown')}: {e}")
         
-        # Agregar clases
         if 'classes' in parsed:
             for cls in parsed['classes']:
                 try:
@@ -623,7 +539,6 @@ class RepositoryService:
                 except Exception as e:
                     logger.debug(f"Error creando clase {cls.get('name', 'unknown')}: {e}")
         
-        # Agregar imports
         if 'imports' in parsed:
             code_file.imports = parsed['imports']
         
@@ -687,24 +602,15 @@ class RepositoryService:
         """
         Elimina un directorio manejando archivos de solo lectura.
         Solo se usa para eliminar copias en data/repositories/.
-        
-        Args:
-            path: Ruta del directorio a eliminar
-            max_retries: Número máximo de reintentos
-            
-        Returns:
-            True si se eliminó correctamente
         """
         if not path.exists():
             return True
         
-        # Verificar seguridad: solo eliminar dentro de data/repositories/
         if "data/repositories" not in str(path):
             logger.warning(f"No se elimina por seguridad: {path}")
             return False
         
         def _on_rmtree_error(func, path, exc_info):
-            """Manejador de errores para shutil.rmtree."""
             try:
                 os.chmod(path, stat.S_IWRITE)
                 func(path)
@@ -726,16 +632,8 @@ class RepositoryService:
     def delete_repository(self, repo_id: int, delete_files: bool = True) -> bool:
         """
         Elimina repositorio (BD, vectores, caché, pero NO archivos originales del usuario).
-        
-        Args:
-            repo_id: ID del repositorio
-            delete_files: Si True, elimina archivos en data/repositories/ (copias)
-            
-        Returns:
-            True si éxito
         """
         try:
-            # Obtener información del repositorio
             repo_data = self.db.get_repository(repo_id)
             if not repo_data:
                 logger.error(f"Repositorio no encontrado: {repo_id}")
@@ -744,14 +642,12 @@ class RepositoryService:
             repo_path = Path(repo_data['path'])
             repo_name = repo_data['name']
             
-            # 1. Eliminar de base de datos (metadatos)
             result = self.db.delete_repository(repo_id)
             
             if not result:
                 logger.error(f"Error eliminando repositorio de BD: {repo_id}")
                 return False
             
-            # 2. Eliminar vectores FAISS
             try:
                 safe_name = repo_name.replace(' ', '_').replace('/', '_').replace('\\', '_')
                 index_path = Path(f"data/vectors/{safe_name}.index")
@@ -761,9 +657,7 @@ class RepositoryService:
             except Exception as e:
                 logger.warning(f"Error eliminando vectores: {e}")
             
-            # 3. Eliminar fragmentos de caché
             try:
-                # Buscar todos los fragmentos asociados a este repositorio
                 cache_files_dir = Path("data/cache/files")
                 if cache_files_dir.exists():
                     for chunk_file in cache_files_dir.glob(f"{repo_id}:*"):
@@ -775,9 +669,7 @@ class RepositoryService:
             except Exception as e:
                 logger.warning(f"Error eliminando fragmentos de caché: {e}")
             
-            # 4. Eliminar archivos copiados en data/repositories/ (si existe)
             if delete_files and repo_path and repo_path.exists():
-                # Verificar que está dentro de data/repositories/ (seguridad)
                 if "data/repositories" in str(repo_path):
                     logger.info(f"Eliminando copia del repositorio: {repo_path}")
                     self._delete_directory_with_retry(repo_path)
