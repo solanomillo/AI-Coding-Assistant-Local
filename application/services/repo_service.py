@@ -51,18 +51,14 @@ class RepositoryService:
         self.repositories_dir = Path("data/repositories")
         self.repositories_dir.mkdir(parents=True, exist_ok=True)
         
-        # Directorios a ignorar (Django y otros)
+        # Directorios a ignorar
         self.ignore_dirs = {
             'venv', 'env', '.venv', '__pycache__',
             'node_modules', '.git', '.idea', '.vscode',
             'dist', 'build', 'target', 'logs', 'tmp', 'temp',
             '.github', '.gitlab', '.circleci', 'assets', 'images',
-            'migrations',           # Archivos de migración de Django
-            '.pytest_cache',        # Caché de pytest
-            '.mypy_cache',          # Caché de mypy
-            'staticfiles',          # Archivos estáticos compilados
-            'media',                # Archivos subidos por usuarios
-            'locale'                # Archivos de internacionalización
+            'migrations', '.pytest_cache', '.mypy_cache',
+            'staticfiles', 'media', 'locale'
         }
         
         # Archivos a ignorar
@@ -75,25 +71,17 @@ class RepositoryService:
             '*.mp4', '*.mp3', '*.pdf', '*.doc', '*.docx',
             '*.log', '*.tmp', '*.cache', '*.db', '*.sqlite',
             '.DS_Store', 'Thumbs.db',
-            'manage.py',            # Archivo de gestión de Django
-            'settings.py',          # Configuración de Django
-            'local_settings.py',    # Configuración local
-            'wsgi.py',              # WSGI de Django
-            'asgi.py',              # ASGI de Django
-            '*.sql',                # Archivos SQL
-            'dump.rdb',             # Redis dump
-            'celerybeat-schedule'   # Celery schedule
+            'manage.py', 'settings.py', 'local_settings.py',
+            'wsgi.py', 'asgi.py', '*.sql', 'dump.rdb', 'celerybeat-schedule'
         }
         
-        # Patrones de archivos a ignorar (wildcard)
+        # Patrones de archivos a ignorar
         self.ignore_patterns = [
             '*.pyc', '*.pyo', '*.so', '*.dll', '*.exe',
             '*.png', '*.jpg', '*.jpeg', '*.gif', '*.ico', '*.svg',
             '*.mp4', '*.mp3', '*.pdf', '*.doc', '*.docx',
             '*.log', '*.tmp', '*.cache', '*.db', '*.sqlite',
-            '*_test.py',            # Archivos de test
-            'test_*.py',            # Archivos de test
-            'migrations/*.py'       # Migraciones de Django
+            '*_test.py', 'test_*.py', 'migrations/*.py'
         ]
         
         # Estadísticas
@@ -124,9 +112,7 @@ class RepositoryService:
             logger.info(f"  - {lang}: {', '.join(exts)}")
     
     def _is_django_project(self, directory: Path) -> bool:
-        """
-        Detecta si el repositorio es un proyecto Django.
-        """
+        """Detecta si el repositorio es un proyecto Django."""
         strong_indicators = {
             'manage.py': False,
             'settings.py': False,
@@ -155,16 +141,12 @@ class RepositoryService:
         strong_count = sum(1 for v in strong_indicators.values() if v)
         weak_count = sum(1 for v in weak_indicators.values() if v >= 2)
         
-        is_django = False
-        
         if strong_count >= 2:
-            is_django = True
-            logger.info(f"Proyecto Django detectado por indicadores fuertes: {strong_count}")
-        elif strong_count >= 1 and weak_count >= 2:
-            is_django = True
-            logger.info(f"Proyecto Django detectado por combinación: 1 fuerte + {weak_count} débiles")
+            return True
+        if strong_count >= 1 and weak_count >= 2:
+            return True
         
-        return is_django
+        return False
     
     def _should_ignore_file(self, file_path: Path) -> bool:
         """Determina si un archivo debe ser ignorado."""
@@ -207,10 +189,17 @@ class RepositoryService:
         
         return True
     
+    def _is_api_available(self) -> bool:
+        """
+        Verifica si la API está disponible (configurada y con cuota).
+        """
+        from application.services.service_factory import ServiceFactory
+        available, _ = ServiceFactory.check_quota_available()
+        return available
+    
     def load_from_zip(self, zip_path: Union[str, Path]) -> Optional[Repository]:
         """
-        Carga repositorio desde ZIP.
-        Verifica API antes de guardar.
+        Carga repositorio desde ZIP. Verifica API antes de analizar.
         """
         zip_path = Path(zip_path)
         if not zip_path.exists():
@@ -218,6 +207,10 @@ class RepositoryService:
             return None
         
         logger.info(f"Procesando ZIP: {zip_path.name}")
+        
+        if not self._is_api_available():
+            logger.warning("API no disponible - repositorio no procesado")
+            return None
         
         try:
             repo_name = zip_path.stem
@@ -232,21 +225,12 @@ class RepositoryService:
             final_path = self._detect_repo_root(temp_dir)
             logger.info(f"Raíz del repositorio: {final_path}")
             
-            # Verificar si ya existe por la ruta
             existing = self.db.get_repository_by_path(str(final_path))
             if existing:
                 logger.info(f"Repositorio ya existe en BD con ID: {existing['id']}")
                 shutil.rmtree(temp_dir)
                 return self.load_repository_from_db(existing['id'])
             
-            # 🔥 PRIMERO VERIFICAR API ANTES DE ANALIZAR
-            from application.services.service_factory import ServiceFactory
-            if not ServiceFactory.is_api_key_valid():
-                logger.warning("API Key no configurada - repositorio no procesado")
-                shutil.rmtree(temp_dir)
-                return None
-            
-            # ANALIZAR
             repository = self._analyze_directory(final_path, repo_name)
             
             if not repository or not repository.files:
@@ -254,7 +238,6 @@ class RepositoryService:
                 shutil.rmtree(temp_dir)
                 return None
             
-            # Guardar en BD
             repo_id = self.db.save_repository(repository)
             repository.db_id = repo_id
             logger.info(f"Repositorio guardado en BD con ID: {repo_id}")
@@ -269,37 +252,31 @@ class RepositoryService:
     
     def load_from_directory(self, directory_path: Union[str, Path]) -> Optional[Repository]:
         """
-        Carga repositorio desde directorio local.
-        Verifica API antes de guardar.
+        Carga repositorio desde directorio local. Verifica API antes de analizar.
         """
         directory_path = Path(directory_path)
         if not directory_path.exists() or not directory_path.is_dir():
             logger.error(f"Directorio no válido: {directory_path}")
             return None
         
-        # Verificar si el repositorio ya existe en la base de datos
+        if not self._is_api_available():
+            logger.warning("API no disponible - repositorio no procesado")
+            return None
+        
         existing = self.db.get_repository_by_path(str(directory_path))
         if existing:
             logger.info(f"Repositorio ya existe en BD con ID: {existing['id']}")
             return self.load_repository_from_db(existing['id'])
         
-        # 🔥 PRIMERO VERIFICAR API ANTES DE ANALIZAR
-        from application.services.service_factory import ServiceFactory
-        if not ServiceFactory.is_api_key_valid():
-            logger.warning("API Key no configurada - repositorio no procesado")
-            return None
-        
         repo_name = directory_path.name
         logger.info(f"Cargando desde directorio: {directory_path}")
         
-        # ANALIZAR
         repository = self._analyze_directory(directory_path, repo_name)
         
         if not repository or not repository.files:
             logger.error("No se encontraron archivos válidos")
             return None
         
-        # Guardar en BD
         repo_id = self.db.save_repository(repository)
         repository.db_id = repo_id
         logger.info(f"Repositorio guardado en BD con ID: {repo_id}")
@@ -457,16 +434,6 @@ class RepositoryService:
         
         logger.info(f"Archivos parseados: {files_parsed}/{total_files}")
         
-        if is_django:
-            models_count = len([f for f in repository.files if 'models.py' in f.name])
-            views_count = len([f for f in repository.files if 'views.py' in f.name])
-            urls_count = len([f for f in repository.files if 'urls.py' in f.name])
-            
-            logger.info(f"Proyecto Django detectado:")
-            logger.info(f"  Modelos: {models_count}")
-            logger.info(f"  Vistas: {views_count}")
-            logger.info(f"  URLs: {urls_count}")
-        
         return repository
     
     def _scan_files_by_extension(self, directory: Path) -> Dict[str, List[Path]]:
@@ -509,14 +476,14 @@ class RepositoryService:
                 try:
                     code_file.functions.append(Function(**func))
                 except Exception as e:
-                    logger.debug(f"Error creando función {func.get('name', 'unknown')}: {e}")
+                    logger.debug(f"Error creando función: {e}")
         
         if 'classes' in parsed:
             for cls in parsed['classes']:
                 try:
                     code_file.classes.append(Class(**cls))
                 except Exception as e:
-                    logger.debug(f"Error creando clase {cls.get('name', 'unknown')}: {e}")
+                    logger.debug(f"Error creando clase: {e}")
         
         if 'imports' in parsed:
             code_file.imports = parsed['imports']

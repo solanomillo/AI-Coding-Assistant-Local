@@ -13,6 +13,8 @@ import streamlit as st
 from datetime import datetime
 import os
 from dotenv import load_dotenv
+from application.services.service_factory import ServiceFactory
+from application.graph.workflow import AgentWorkflow
 
 # Cargar variables de entorno
 load_dotenv()
@@ -118,9 +120,8 @@ def initialize_session_state() -> None:
     if 'agent_workflow' not in st.session_state:
         st.session_state.agent_workflow = None
     
-    if 'prefer_pro' not in st.session_state:
-        prefer_pro = os.getenv("GEMINI_PREFER_PRO", "false").lower() == "true"
-        st.session_state.prefer_pro = prefer_pro
+    if 'selected_model' not in st.session_state:
+        st.session_state.selected_model = "gemini-2.5-flash"
     
     if 'temperature' not in st.session_state:
         st.session_state.temperature = 0.2
@@ -151,6 +152,11 @@ def show_welcome_page() -> None:
     if st.session_state.get('daily_limit_reached', False):
         st.error("⚠️ **Límite diario de API alcanzado**")
         st.info("Las consultas estarán disponibles mañana. Puedes seguir usando repositorios ya indexados.")
+    
+    # Mostrar modelo seleccionado
+    model_info = st.session_state.get('selected_model', 'gemini-2.5-flash')
+    model_emoji = "⭐" if "pro" in model_info.lower() else "⚡"
+    st.caption(f"🤖 Modelo actual: {model_emoji} `{model_info}`")
     
     col1, col2, col3 = st.columns(3)
     
@@ -217,31 +223,33 @@ def show_welcome_page() -> None:
                 
                 with cols[4]:
                     if st.button("Cargar", key=f"welcome_load_{repo['id']}"):
-                        from application.services.rag_gemini_service import RAGGeminiService
-                        from application.graph.workflow import AgentWorkflow
+                        
                         
                         path = Path(repo['path'])
                         if path.exists():
                             with st.spinner(f"Cargando repositorio {repo['name']}..."):
                                 try:
-                                    rag_service = RAGGeminiService(
+                                    rag_service = ServiceFactory.create_rag_service(
                                         repo_name=repo['name'],
                                         repo_path=path,
                                         repo_id=repo['id'],
-                                        prefer_pro=st.session_state.prefer_pro,
+                                        model_name=st.session_state.selected_model,
                                         max_file_size_mb=st.session_state.max_file_size_mb,
                                         include_docs=st.session_state.include_docs
                                     )
                                     
-                                    st.session_state.rag_service = rag_service
-                                    st.session_state.current_repo = repo
-                                    st.session_state.repository_loaded = True
-                                    st.session_state.messages = []
-                                    
-                                    st.session_state.agent_workflow = AgentWorkflow(rag_service)
-                                    st.success(f"✅ Repositorio {repo['name']} cargado")
-                                    st.success("🤖 Agentes LangGraph inicializados")
-                                    st.rerun()
+                                    if rag_service:
+                                        st.session_state.rag_service = rag_service
+                                        st.session_state.current_repo = repo
+                                        st.session_state.repository_loaded = True
+                                        st.session_state.messages = []
+                                        
+                                        st.session_state.agent_workflow = AgentWorkflow(rag_service)
+                                        st.success(f"✅ Repositorio {repo['name']} cargado")
+                                        st.success("🤖 Agentes LangGraph inicializados")
+                                        st.rerun()
+                                    else:
+                                        st.error("❌ Error al crear el servicio RAG")
                                 except Exception as e:
                                     st.error(f"❌ Error: {str(e)}")
                         else:
@@ -348,7 +356,7 @@ def main() -> NoReturn:
         st.markdown("---")
         st.caption("v1.0.0 | Gemini + FAISS")
         st.caption("Multi-lenguaje | Agentes LangGraph")
-        st.caption("Dimensión embeddings: 3072")
+        st.caption(f"Modelo: {st.session_state.get('selected_model', 'gemini-2.5-flash')}")
     
     if page == "🏠 Inicio":
         show_welcome_page()

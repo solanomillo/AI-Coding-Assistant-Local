@@ -102,24 +102,15 @@ class BaseAgent(ABC):
         
         # Patrones para detectar archivos
         patterns = [
-            # archivo nombre.py
             rf'archivo\s+([a-zA-Z0-9_\-\.]+(?:{extensions_pattern}))',
-            # archivo nombre
             rf'archivo\s+([a-zA-Z0-9_\-\.]+)',
-            # nombre.py (solo la extensión)
             rf'([a-zA-Z0-9_\-\.]+(?:{extensions_pattern}))',
-            # en nombre.py
             rf'en\s+([a-zA-Z0-9_\-\.]+(?:{extensions_pattern}))',
-            # de nombre.py
             rf'de\s+([a-zA-Z0-9_\-\.]+(?:{extensions_pattern}))',
-            # el archivo nombre.py
             rf'el\s+archivo\s+([a-zA-Z0-9_\-\.]+(?:{extensions_pattern}))',
-            # la función en nombre.py
-            rf'función\s+en\s+([a-zA-Z0-9_\-\.]+(?:{extensions_pattern}))',
-            # el código en nombre.css
-            rf'código\s+en\s+([a-zA-Z0-9_\-\.]+(?:{extensions_pattern}))',
-            # el estilo en estilo.css
-            rf'estilo\s+en\s+([a-zA-Z0-9_\-\.]+(?:{extensions_pattern}))',
+            rf'la\s+función\s+en\s+([a-zA-Z0-9_\-\.]+(?:{extensions_pattern}))',
+            rf'el\s+código\s+en\s+([a-zA-Z0-9_\-\.]+(?:{extensions_pattern}))',
+            rf'el\s+estilo\s+en\s+([a-zA-Z0-9_\-\.]+(?:{extensions_pattern}))',
         ]
         
         for pattern in patterns:
@@ -237,10 +228,11 @@ class BaseAgent(ABC):
         file_name = self._extract_file_name(query)
         
         if file_name:
-            logger.info(f"Archivo específico detectado: {file_name}")
+            logger.info(f"📄 Archivo específico detectado: {file_name}")
             full_content = self._get_full_file_content(file_name)
             if full_content:
                 language = self._get_file_language(file_name)
+                logger.info(f"✅ Archivo completo recuperado: {file_name} ({len(full_content)} caracteres, {language})")
                 return [{
                     'id': f"full:{file_name}",
                     'file': file_name,
@@ -249,6 +241,8 @@ class BaseAgent(ABC):
                     'score': 1.0,
                     'is_full_file': True
                 }]
+            else:
+                logger.warning(f"❌ No se pudo recuperar archivo: {file_name}")
         
         # Si no hay archivo específico, usar búsqueda vectorial
         if not self.vector_store:
@@ -264,7 +258,6 @@ class BaseAgent(ABC):
             return []
         
         try:
-            # Generar embedding de la consulta
             logger.debug(f"Generando embedding para consulta: {query[:50]}...")
             query_vector = self.embedding_service.generate_embedding(query)
             
@@ -272,63 +265,69 @@ class BaseAgent(ABC):
                 logger.error(f"Dimensión incorrecta: {len(query_vector)}")
                 return []
             
-            # Buscar en FAISS
+            logger.debug(f"Buscando en FAISS con k={k}...")
             results = self.vector_store.search(query_vector, k=k)
             
             if not results:
-                logger.debug("No se encontraron resultados")
+                logger.debug("No se encontraron resultados en FAISS")
                 return []
             
-            # Recuperar fragmentos completos del caché y agrupar por archivo
-            fragments_by_file = {}
+            logger.info(f"FAISS encontró {len(results)} resultados")
             
+            # Recuperar fragmentos completos del caché
+            fragments = []
             for r in results:
                 chunk_id = r['id']
                 content = self.cache_service.get_chunk(chunk_id)
                 if content:
                     parts = chunk_id.split(':')
                     file_name = parts[1] if len(parts) > 1 else 'desconocido'
-                    
-                    if file_name not in fragments_by_file:
-                        fragments_by_file[file_name] = []
-                    
-                    fragments_by_file[file_name].append({
+                    fragments.append({
                         'id': chunk_id,
                         'file': file_name,
                         'content': content,
                         'score': r['score']
                     })
             
-            # Si tenemos fragmentos de un archivo, intentar obtener el archivo completo
-            if fragments_by_file:
-                # Tomar el archivo con más fragmentos
-                best_file = max(fragments_by_file.keys(), key=lambda f: len(fragments_by_file[f]))
-                full_content = self._get_full_file_content(best_file)
+            logger.info(f"Recuperados {len(fragments)} fragmentos del caché")
+            
+            if not fragments:
+                logger.warning("No se recuperaron fragmentos del caché")
+                return []
+            
+            # Intentar obtener archivo completo si hay suficientes fragmentos
+            if len(fragments) >= 3:
+                # Contar fragmentos por archivo
+                fragments_by_file = {}
+                for f in fragments:
+                    file = f['file']
+                    if file not in fragments_by_file:
+                        fragments_by_file[file] = []
+                    fragments_by_file[file].append(f)
                 
-                if full_content:
-                    language = self._get_file_language(best_file)
-                    logger.info(f"Recuperado archivo completo: {best_file} ({language})")
-                    return [{
-                        'id': f"full:{best_file}",
-                        'file': best_file,
-                        'content': full_content,
-                        'language': language,
-                        'score': 1.0,
-                        'is_full_file': True
-                    }]
+                # Buscar archivo con más fragmentos
+                best_file = max(fragments_by_file.keys(), key=lambda x: len(fragments_by_file[x]))
+                if len(fragments_by_file[best_file]) >= 3:
+                    full_content = self._get_full_file_content(best_file)
+                    if full_content:
+                        language = self._get_file_language(best_file)
+                        logger.info(f"📄 Archivo completo recuperado por fragmentos: {best_file} ({len(full_content)} caracteres)")
+                        return [{
+                            'id': f"full:{best_file}",
+                            'file': best_file,
+                            'content': full_content,
+                            'language': language,
+                            'score': 1.0,
+                            'is_full_file': True
+                        }]
             
-            # Si no se pudo obtener archivo completo, devolver fragmentos
-            all_fragments = []
-            for fragments in fragments_by_file.values():
-                all_fragments.extend(fragments)
-            
-            all_fragments.sort(key=lambda x: x['score'], reverse=True)
-            
-            logger.debug(f"Recuperados {len(all_fragments)} fragmentos para {self.name}")
-            return all_fragments[:k]
+            logger.debug(f"Retornando {len(fragments)} fragmentos para {self.name}")
+            return fragments[:k]
             
         except Exception as e:
             logger.error(f"Error recuperando contexto: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
             return []
     
     def _build_context_text(self, fragments: List[Dict[str, Any]]) -> str:
@@ -361,7 +360,15 @@ class BaseAgent(ABC):
                     f"```\n"
                 )
         
-        return "\n---\n".join(context_parts)
+        full_context = "\n---\n".join(context_parts)
+        logger.info(f"Contexto construido: {len(full_context)} caracteres, {len(fragments)} fragmentos")
+        
+        # Si el contexto es muy grande, truncar (pero mantener archivo completo)
+        if len(full_context) > 15000:
+            logger.warning(f"Contexto muy grande ({len(full_context)} caracteres), truncando a 15000...")
+            full_context = full_context[:15000] + "\n... (contexto truncado)"
+        
+        return full_context
     
     def _build_prompt(self, query: str, context: str, instructions: str) -> str:
         """
@@ -379,7 +386,7 @@ class BaseAgent(ABC):
         if self.repo_context:
             repo_info = f"Repositorio: {self.repo_context.get('name', 'desconocido')}\n"
         
-        return f"""{instructions}
+        prompt = f"""{instructions}
 
 {repo_info}
 CONTEXTO DEL CÓDIGO:
@@ -399,3 +406,6 @@ INSTRUCCIONES ADICIONALES:
 - Responde en español
 
 RESPUESTA:"""
+        
+        logger.info(f"Prompt construido: {len(prompt)} caracteres")
+        return prompt
