@@ -523,22 +523,22 @@ def show_configuration_section() -> None:
                         ServiceFactory.clear_cache()
                         st.rerun()
         with col2:
-        if st.button("🔄 Probar conexión", use_container_width=True):
-            selected_model = st.session_state.get('selected_model', 'gemini-2.5-flash')
-            with st.spinner(f"Probando conexión con modelo {selected_model}..."):
-                # force_check=True para ignorar caché en prueba manual
-                available, status = ServiceFactory.check_quota_available(selected_model, force_check=True)
-                if available:
-                    st.success(f"✅ Conexión exitosa con modelo: {selected_model}")
-                elif status == "QUOTA_EXCEEDED":
-                    st.warning("⚠️ Cuota agotada. Espera hasta mañana.")
-                elif "MODELO_NO_DISPONIBLE" in status:
-                    st.error(f"❌ El modelo '{selected_model}' no está disponible con tu API key")
-                    st.info("Prueba seleccionando otro modelo en la pestaña 'Modelos'")
-                elif status == "INVALID_API_KEY":
-                    st.error("❌ API Key inválida. Verifica que la hayas copiado correctamente.")
-                else:
-                    st.error(f"❌ Error: {status}")
+            if st.button("🔄 Probar conexión", use_container_width=True):
+                selected_model = st.session_state.get('selected_model', 'gemini-2.5-flash')
+                with st.spinner(f"Probando conexión con modelo {selected_model}..."):
+                    # force_check=True para ignorar caché en prueba manual
+                    available, status = ServiceFactory.check_quota_available(selected_model, force_check=True)
+                    if available:
+                        st.success(f"✅ Conexión exitosa con modelo: {selected_model}")
+                    elif status == "QUOTA_EXCEEDED":
+                        st.warning("⚠️ Cuota agotada. Espera hasta mañana.")
+                    elif "MODELO_NO_DISPONIBLE" in status:
+                        st.error(f"❌ El modelo '{selected_model}' no está disponible con tu API key")
+                        st.info("Prueba seleccionando otro modelo en la pestaña 'Modelos'")
+                    elif status == "INVALID_API_KEY":
+                        st.error("❌ API Key inválida. Verifica que la hayas copiado correctamente.")
+                    else:
+                        st.error(f"❌ Error: {status}")
     
     with tab2:
         st.subheader("🤖 Selección de Modelo")

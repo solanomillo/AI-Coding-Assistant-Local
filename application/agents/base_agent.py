@@ -8,6 +8,7 @@ import re
 from abc import ABC, abstractmethod
 from typing import Dict, Any, Optional, List
 from pathlib import Path
+import traceback
 
 logger = logging.getLogger(__name__)
 
@@ -214,25 +215,18 @@ class BaseAgent(ABC):
     
     def _retrieve_context(self, query: str, k: int = 5) -> List[Dict[str, Any]]:
         """
-        Recupera contexto relevante del vector store y caché.
+        Recupera contexto relevante.
         Prioriza archivos completos si se mencionan en la consulta.
-        
-        Args:
-            query: Consulta para búsqueda
-            k: Número de resultados
-            
-        Returns:
-            Lista de fragmentos con contenido completo
         """
         # Intentar extraer nombre de archivo de la consulta
         file_name = self._extract_file_name(query)
         
         if file_name:
-            logger.info(f"📄 Archivo específico detectado: {file_name}")
+            logger.info(f"Archivo específico detectado: {file_name}")
             full_content = self._get_full_file_content(file_name)
             if full_content:
                 language = self._get_file_language(file_name)
-                logger.info(f"✅ Archivo completo recuperado: {file_name} ({len(full_content)} caracteres, {language})")
+                logger.info(f"Archivo completo recuperado: {file_name} ({len(full_content)} caracteres, {language})")
                 return [{
                     'id': f"full:{file_name}",
                     'file': file_name,
@@ -244,7 +238,69 @@ class BaseAgent(ABC):
             else:
                 logger.warning(f"❌ No se pudo recuperar archivo: {file_name}")
         
-        # Si no hay archivo específico, usar búsqueda vectorial
+        # NUEVO: Detectar si es una consulta general sobre el repositorio
+        query_lower = query.lower()
+        general_queries = [
+            'qué hace', 'de qué trata', 'resumen', 'qué es', 'explica el repositorio',
+            'qué hace este proyecto', 'descripción', 'funcionalidad', 'propósito'
+        ]
+        
+        is_general_query = any(phrase in query_lower for phrase in general_queries)
+        
+        # Si es una consulta general, intentar obtener TODOS los archivos del repositorio
+        if is_general_query and self.repo_path:
+            logger.info("🔍 Consulta general detectada - recuperando archivos relevantes del repositorio")
+            
+            # Obtener archivos del repositorio
+            all_files = []
+            extensions_to_include = ['.py', '.js', '.html', '.css', '.jsx', '.ts', '.tsx']
+            
+            for ext in extensions_to_include:
+                for file_path in self.repo_path.rglob(f"*{ext}"):
+                    if self._should_ignore_file(file_path):
+                        continue
+                    try:
+                        content = file_path.read_text(encoding='utf-8', errors='ignore')
+                        if content.strip():
+                            # Limitar tamaño para no saturar el contexto
+                            if len(content) > 3000:
+                                content = content[:3000] + "\n... (contenido truncado)"
+                            all_files.append({
+                                'file': file_path.name,
+                                'path': str(file_path.relative_to(self.repo_path)),
+                                'content': content,
+                                'language': self._get_file_language(file_path.name)
+                            })
+                    except Exception as e:
+                        logger.debug(f"Error leyendo {file_path}: {e}")
+            
+            if all_files:
+                logger.info(f"Recuperados {len(all_files)} archivos para consulta general")
+                # Ordenar por tipo (HTML, CSS, JS, PY) para mejor contexto
+                priority_order = {'.html': 0, '.css': 1, '.js': 2, '.py': 3}
+                all_files.sort(key=lambda x: priority_order.get(Path(x['file']).suffix, 4))
+                
+                # Construir contexto con todos los archivos
+                combined_content = []
+                for f in all_files[:5]:  # Limitar a 5 archivos para no exceder contexto
+                    combined_content.append(
+                        f"[Archivo: {f['path']} ({f['language']})]\n"
+                        f"```{f['language'].lower()}\n"
+                        f"{f['content']}\n"
+                        f"```\n"
+                    )
+                
+                return [{
+                    'id': "full:repository_summary",
+                    'file': "resumen_repositorio",
+                    'content': "\n---\n".join(combined_content),
+                    'language': "multi",
+                    'score': 1.0,
+                    'is_full_file': True,
+                    'is_repository_summary': True
+                }]
+        
+        # Si no hay archivo específico ni consulta general, usar búsqueda vectorial
         if not self.vector_store:
             logger.warning(f"Vector store no disponible para agente {self.name}")
             return []
@@ -296,8 +352,7 @@ class BaseAgent(ABC):
                 return []
             
             # Intentar obtener archivo completo si hay suficientes fragmentos
-            if len(fragments) >= 3:
-                # Contar fragmentos por archivo
+            if len(fragments) >= 2:
                 fragments_by_file = {}
                 for f in fragments:
                     file = f['file']
@@ -305,9 +360,8 @@ class BaseAgent(ABC):
                         fragments_by_file[file] = []
                     fragments_by_file[file].append(f)
                 
-                # Buscar archivo con más fragmentos
                 best_file = max(fragments_by_file.keys(), key=lambda x: len(fragments_by_file[x]))
-                if len(fragments_by_file[best_file]) >= 3:
+                if len(fragments_by_file[best_file]) >= 2:
                     full_content = self._get_full_file_content(best_file)
                     if full_content:
                         language = self._get_file_language(best_file)
@@ -325,8 +379,7 @@ class BaseAgent(ABC):
             return fragments[:k]
             
         except Exception as e:
-            logger.error(f"Error recuperando contexto: {e}")
-            import traceback
+            logger.error(f"Error recuperando contexto: {e}")            
             logger.error(traceback.format_exc())
             return []
     
