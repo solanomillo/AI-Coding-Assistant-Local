@@ -8,7 +8,6 @@ import re
 from abc import ABC, abstractmethod
 from typing import Dict, Any, Optional, List
 from pathlib import Path
-import traceback
 
 logger = logging.getLogger(__name__)
 
@@ -238,12 +237,12 @@ class BaseAgent(ABC):
             else:
                 logger.warning(f"❌ No se pudo recuperar archivo: {file_name}")
         
-        # DETECTAR CONSULTAS GENERALES SOBRE EL REPOSITORIO
+        # Detectar consultas generales sobre el repositorio
         query_lower = query.lower()
         general_queries = [
             'qué hace', 'de qué trata', 'resumen', 'qué es', 'explica el repositorio',
             'qué hace este proyecto', 'descripción', 'funcionalidad', 'propósito',
-            'qué contiene', 'qué archivos', 'estructura'
+            'qué contiene', 'qué archivos', 'estructura', 'que hace', 'que es'
         ]
         
         is_general_query = any(phrase in query_lower for phrase in general_queries)
@@ -255,8 +254,14 @@ class BaseAgent(ABC):
             # Definir extensiones a incluir (priorizar HTML, CSS, JS)
             extensions_to_include = {
                 '.html': 0,
+                '.htm': 0,
                 '.css': 1,
+                '.scss': 1,
+                '.sass': 1,
                 '.js': 2,
+                '.jsx': 2,
+                '.ts': 2,
+                '.tsx': 2,
                 '.py': 3
             }
             
@@ -265,7 +270,7 @@ class BaseAgent(ABC):
             for ext, priority in extensions_to_include.items():
                 for file_path in self.repo_path.rglob(f"*{ext}"):
                     # Ignorar archivos en directorios comunes
-                    if any(ignore in file_path.parts for ignore in ['__pycache__', 'node_modules', 'venv', '.git']):
+                    if any(ignore in file_path.parts for ignore in ['__pycache__', 'node_modules', 'venv', '.git', 'dist', 'build']):
                         continue
                     
                     try:
@@ -289,7 +294,7 @@ class BaseAgent(ABC):
                         logger.debug(f"Error leyendo {file_path}: {e}")
             
             if all_files:
-                # Ordenar por prioridad (HTML primero, luego CSS, luego JS)
+                # Ordenar por prioridad (HTML primero, luego CSS, luego JS, luego PY)
                 all_files.sort(key=lambda x: (x['priority'], -x['size']))
                 
                 logger.info(f"📁 Recuperados {len(all_files)} archivos para consulta general")
@@ -416,12 +421,18 @@ class BaseAgent(ABC):
             language_info = f.get('language', 'código')
             
             if f.get('is_full_file'):
-                context_parts.append(
-                    f"[ARCHIVO COMPLETO: {f['file']} ({language_info})]\n"
-                    f"```{language_info.lower()}\n"
-                    f"{f['content']}\n"
-                    f"```\n"
-                )
+                if f.get('is_repository_summary'):
+                    context_parts.append(
+                        f"[RESUMEN DEL REPOSITORIO]\n"
+                        f"{f['content']}\n"
+                    )
+                else:
+                    context_parts.append(
+                        f"[ARCHIVO COMPLETO: {f['file']} ({language_info})]\n"
+                        f"```{language_info.lower()}\n"
+                        f"{f['content']}\n"
+                        f"```\n"
+                    )
             else:
                 context_parts.append(
                     f"[Fragmento {i+1} - Archivo: {f['file']}]\n"
@@ -433,7 +444,7 @@ class BaseAgent(ABC):
         full_context = "\n---\n".join(context_parts)
         logger.info(f"Contexto construido: {len(full_context)} caracteres, {len(fragments)} fragmentos")
         
-        # Si el contexto es muy grande, truncar (pero mantener archivo completo)
+        # Si el contexto es muy grande, truncar
         if len(full_context) > 15000:
             logger.warning(f"Contexto muy grande ({len(full_context)} caracteres), truncando a 15000...")
             full_context = full_context[:15000] + "\n... (contexto truncado)"
@@ -458,24 +469,24 @@ class BaseAgent(ABC):
         
         prompt = f"""{instructions}
 
-{repo_info}
-CONTEXTO DEL CÓDIGO:
-{context}
+                    {repo_info}
+                    CONTEXTO DEL CÓDIGO:
+                    {context}
 
-CONSULTA DEL USUARIO:
-{query}
+                    CONSULTA DEL USUARIO:
+                    {query}
 
-INSTRUCCIONES ADICIONALES:
-- Analiza TODO el código proporcionado en el contexto
-- Si se proporciona un archivo completo, analiza todas las funciones, clases, estilos o elementos
-- Identifica el lenguaje de programación de cada archivo
-- Responde basándote ÚNICAMENTE en el código que ves
-- Si el código no está presente, indícalo claramente
-- Sé técnico y preciso
-- Usa formato de código con ``` y especifica el lenguaje
-- Responde en español
+                    INSTRUCCIONES ADICIONALES:
+                    - Analiza TODO el código proporcionado en el contexto
+                    - Si se proporciona un resumen del repositorio, analiza todos los archivos incluidos
+                    - Identifica el lenguaje de programación de cada archivo
+                    - Responde basándote ÚNICAMENTE en el código que ves
+                    - Si el código no está presente, indícalo claramente
+                    - Sé técnico y preciso
+                    - Usa formato de código con ``` y especifica el lenguaje
+                    - Responde en español
 
-RESPUESTA:"""
+                    RESPUESTA:"""
         
         logger.info(f"Prompt construido: {len(prompt)} caracteres")
         return prompt
