@@ -8,7 +8,7 @@ from pathlib import Path
 import tempfile
 import os
 from dotenv import load_dotenv, set_key
-from typing import Union, Dict, Any, List
+from typing import Union, Dict, Any, List, Tuple
 
 from application.services.repo_service import RepositoryService
 from application.services.service_factory import ServiceFactory
@@ -39,7 +39,7 @@ def get_repo_name(repo: Union[Dict[str, Any], Any]) -> str:
 
 
 def get_repo_file_count(repo: Union[Dict[str, Any], Any]) -> int:
-    """Obtiene el número de archivos."""
+    """Obtiene el numero de archivos."""
     if isinstance(repo, dict):
         return repo.get('file_count', 0)
     if hasattr(repo, 'files'):
@@ -47,7 +47,73 @@ def get_repo_file_count(repo: Union[Dict[str, Any], Any]) -> int:
     return getattr(repo, 'file_count', 0)
 
 
-def _setup_services(repo) -> tuple:
+def _check_quota(model_name: str = None, force_check: bool = False) -> Tuple[bool, str, str]:
+    """
+    Verifica si la cuota esta disponible.
+    Retorna (available, status, message)
+    """
+    if model_name is None:
+        model_name = st.session_state.get('selected_model', 'gemini-2.5-flash')
+    
+    available, status = ServiceFactory.check_quota_available(model_name, force_check=force_check)
+    
+    if available:
+        return True, "OK", ""
+    
+    if status == "API_KEY_NOT_CONFIGURED":
+        return False, "API_KEY_NOT_CONFIGURED", "🔑 API key no configurada"
+    
+    if status == "QUOTA_EXCEEDED":
+        return False, "QUOTA_EXCEEDED", "⚠️ Límite diario de API alcanzado. Las consultas estarán disponibles mañana."
+    
+    if "MODELO_NO_DISPONIBLE" in status:
+        return False, "MODELO_NO_DISPONIBLE", f"❌ El modelo '{model_name}' no está disponible con tu API key"
+    
+    if status == "INVALID_API_KEY":
+        return False, "INVALID_API_KEY", "❌ API key inválida. Verifica que la hayas copiado correctamente."
+    
+    return False, "ERROR", f"❌ Error de API: {status}"
+
+
+def _show_quota_warning() -> None:
+    """Muestra advertencia de cuota agotada en la interfaz."""
+    st.error("⚠️ **Límite diario de API alcanzado**")
+    st.info("""
+    Has superado el límite diario de solicitudes de Gemini API.
+    
+    **¿Qué puedes hacer?**
+    - Esperar hasta mañana para que se reinicie el contador
+    - Las consultas estarán disponibles nuevamente mañana
+    - Puedes seguir usando repositorios ya indexados para consultas
+    - No se pueden indexar nuevos repositorios hasta mañana
+    
+    **Límites del free tier:**
+    - 20 solicitudes de texto por minuto
+    - 100 solicitudes de embeddings por minuto
+    - 1500 solicitudes por día (aproximadamente)
+    """)
+    st.session_state.daily_limit_reached = True
+
+
+def _show_api_key_warning() -> None:
+    """Muestra advertencia de API key no configurada."""
+    st.error("🔑 **API Key no configurada**")
+    st.info("""
+    Para usar esta aplicación, necesitas configurar tu API key de Gemini.
+    
+    **Pasos:**
+    1. Ve a la pestaña **Configuración** en el menú lateral
+    2. Ingresa tu API key de Google AI Studio
+    3. Haz clic en Guardar
+    
+    **¿No tienes API key?** 
+    - Ve a [makersuite.google.com/app/apikey](https://makersuite.google.com/app/apikey)
+    - Inicia sesión con tu cuenta Google
+    - Crea una nueva API key (es gratuita)
+    """)
+
+
+def _setup_services(repo) -> Tuple[bool, Any, Any]:
     """Configura los servicios para un repositorio."""
     rag_service, agent_workflow = ServiceFactory.setup_repository_services(
         repo=repo,
@@ -63,7 +129,7 @@ def _setup_services(repo) -> tuple:
 
 
 def _show_repository_stats(repo) -> None:
-    """Muestra estadísticas del repositorio."""
+    """Muestra estadisticas del repositorio."""
     col1, col2, col3 = st.columns(3)
     with col1:
         st.metric("📄 Archivos", len(repo.files))
@@ -75,82 +141,22 @@ def _show_repository_stats(repo) -> None:
         st.metric("📚 Clases", total_classes)
 
 
-def _check_quota(model_name: str = None, force_check: bool = False) -> bool:
-    """
-    Verifica si la cuota está disponible usando el modelo especificado.
-    Usa caché para evitar llamadas repetidas.
-    
-    Args:
-        model_name: Modelo a probar (None = usar seleccionado)
-        force_check: Si True, ignora caché y prueba nuevamente
-    """
-    if model_name is None:
-        model_name = st.session_state.get('selected_model', 'gemini-2.5-flash')
-    
-    # Usar force_check=False para usar caché
-    available, status = ServiceFactory.check_quota_available(model_name, force_check=force_check)
-    
-    if available:
-        return True
-    
-    if status == "API_KEY_NOT_CONFIGURED":
-        st.error("🔑 **API Key no configurada**")
-        st.info("""
-        Para usar esta aplicación, necesitas configurar tu API key de Gemini.
-        
-        **Pasos:**
-        1. Ve a la pestaña **Configuración** en el menú lateral
-        2. Ingresa tu API key de Google AI Studio
-        3. Haz clic en Guardar
-        """)
-        return False
-    
-    if status == "QUOTA_EXCEEDED":
-        st.error("⚠️ **Límite diario de API alcanzado**")
-        st.info("""
-        Has superado el límite diario de solicitudes de Gemini API.
-        
-        **¿Qué puedes hacer?**
-        - Esperar hasta mañana para que se reinicie el contador
-        - Las consultas estarán disponibles nuevamente mañana
-        - Las consultas a repositorios ya indexados seguirán funcionando
-        """)
-        st.session_state.daily_limit_reached = True
-        return False
-    
-    if "MODELO_NO_DISPONIBLE" in status:
-        st.error(f"❌ **El modelo '{model_name}' no está disponible**")
-        st.info("""
-        El modelo seleccionado no está disponible con tu API key.
-        
-        **¿Qué puedes hacer?**
-        - Ve a la pestaña **Configuración → Modelos**
-        - Selecciona otro modelo de la lista
-        - Haz clic en 'Probar este modelo' para verificar que funciona
-        """)
-        return False
-    
-    if status == "INVALID_API_KEY":
-        st.error("❌ **API Key inválida**")
-        st.info("Verifica que hayas copiado correctamente tu API key de Gemini.")
-        return False
-    
-    st.error(f"❌ Error de API: {status}")
-    return False
-
-
 def show_upload_section() -> None:
-    """Sección de carga de repositorios."""
+    """Seccion de carga de repositorios."""
     st.title("📤 Cargar Repositorio")
     
     if 'repo_service' not in st.session_state:
         st.session_state.repo_service = RepositoryService()
     
-    # Verificar modelo disponible antes de cargar
-    selected_model = st.session_state.get('selected_model', 'gemini-2.5-flash')
-    if not _check_quota(selected_model):
-        st.info(f"💡 **Modelo actual:** {selected_model}")
-        st.info("Puedes cambiar el modelo en la pestaña Configuración → Modelos")
+    available, status, message = _check_quota()
+    
+    if not available:
+        if status == "API_KEY_NOT_CONFIGURED":
+            _show_api_key_warning()
+        elif status == "QUOTA_EXCEEDED":
+            _show_quota_warning()
+        else:
+            st.error(message)
         return
     
     with st.expander("⚡ Optimizaciones activas", expanded=False):
@@ -184,17 +190,22 @@ def show_upload_section() -> None:
                 try:
                     repo = st.session_state.repo_service.load_from_zip(tmp_path)
                     
-                    if repo and repo.files:
-                        st.success(f"✅ **Repositorio '{repo.name}' procesado correctamente**")
-                        _show_repository_stats(repo)
-                        
+                    if repo:
                         if hasattr(repo, 'db_id') and repo.db_id:
                             safe_name = repo.name.replace(' ', '_').replace('/', '_').replace('\\', '_')
                             index_path = Path(f"data/vectors/{safe_name}.index")
                             
                             if index_path.exists():
                                 st.warning("⚠️ **Repositorio ya existente**")
-                                st.info(f"Cargado desde caché.")
+                                st.info("📦 Cargado desde caché.")
+                                
+                                avail, stat, msg = _check_quota()
+                                if not avail:
+                                    if stat == "QUOTA_EXCEEDED":
+                                        _show_quota_warning()
+                                    else:
+                                        st.error(msg)
+                                    return
                                 
                                 success, rag, agent = _setup_services(repo)
                                 if success:
@@ -207,6 +218,17 @@ def show_upload_section() -> None:
                                 else:
                                     st.error("❌ Error al configurar servicios")
                             else:
+                                st.success(f"✅ **Repositorio '{repo.name}' procesado correctamente**")
+                                _show_repository_stats(repo)
+                                
+                                avail, stat, msg = _check_quota()
+                                if not avail:
+                                    if stat == "QUOTA_EXCEEDED":
+                                        _show_quota_warning()
+                                    else:
+                                        st.error(msg)
+                                    return
+                                
                                 with st.spinner("🧠 Indexando..."):
                                     rag = ServiceFactory.create_rag_service(
                                         repo_name=repo.name,
@@ -217,8 +239,12 @@ def show_upload_section() -> None:
                                         include_docs=st.session_state.get('include_docs', False)
                                     )
                                     
-                                    if rag and rag.index_repository(repo):
-                                        st.success("✅ Indexación completada")
+                                    if rag is None:
+                                        st.error("❌ No se pudo crear el servicio RAG. Verifica tu API key y cuota.")
+                                        return
+                                    
+                                    if rag.index_repository(repo):
+                                        st.success("✅ **Indexación completada**")
                                         success, rag, agent = _setup_services(repo)
                                         if success:
                                             st.session_state.rag_service = rag
@@ -226,7 +252,7 @@ def show_upload_section() -> None:
                                             st.session_state.current_repo = repo
                                             st.session_state.repository_loaded = True
                                             st.session_state.messages = []
-                                            st.success("🤖 Agentes inicializados")
+                                            st.success("🤖 **Agentes inicializados**")
                                     else:
                                         st.error("❌ Error en indexación")
                     else:
@@ -249,16 +275,22 @@ def show_upload_section() -> None:
                 with st.spinner("📁 Analizando repositorio..."):
                     repo = st.session_state.repo_service.load_from_directory(path)
                     
-                    if repo and repo.files:
-                        st.success(f"✅ **Repositorio '{repo.name}' procesado correctamente**")
-                        _show_repository_stats(repo)
-                        
+                    if repo:
                         if hasattr(repo, 'db_id') and repo.db_id:
                             safe_name = repo.name.replace(' ', '_').replace('/', '_').replace('\\', '_')
                             index_path = Path(f"data/vectors/{safe_name}.index")
                             
                             if index_path.exists():
                                 st.warning("⚠️ **Repositorio ya existente**")
+                                
+                                avail, stat, msg = _check_quota()
+                                if not avail:
+                                    if stat == "QUOTA_EXCEEDED":
+                                        _show_quota_warning()
+                                    else:
+                                        st.error(msg)
+                                    return
+                                
                                 success, rag, agent = _setup_services(repo)
                                 if success:
                                     st.session_state.rag_service = rag
@@ -267,7 +299,20 @@ def show_upload_section() -> None:
                                     st.session_state.repository_loaded = True
                                     st.session_state.messages = []
                                     st.success("✅ Repositorio cargado correctamente")
+                                else:
+                                    st.error("❌ Error al configurar servicios")
                             else:
+                                st.success(f"✅ **Repositorio '{repo.name}' procesado correctamente**")
+                                _show_repository_stats(repo)
+                                
+                                avail, stat, msg = _check_quota()
+                                if not avail:
+                                    if stat == "QUOTA_EXCEEDED":
+                                        _show_quota_warning()
+                                    else:
+                                        st.error(msg)
+                                    return
+                                
                                 with st.spinner("🧠 Indexando..."):
                                     rag = ServiceFactory.create_rag_service(
                                         repo_name=repo.name,
@@ -278,8 +323,12 @@ def show_upload_section() -> None:
                                         include_docs=st.session_state.get('include_docs', False)
                                     )
                                     
-                                    if rag and rag.index_repository(repo):
-                                        st.success("✅ Indexación completada")
+                                    if rag is None:
+                                        st.error("❌ No se pudo crear el servicio RAG. Verifica tu API key y cuota.")
+                                        return
+                                    
+                                    if rag.index_repository(repo):
+                                        st.success("✅ **Indexación completada**")
                                         success, rag, agent = _setup_services(repo)
                                         if success:
                                             st.session_state.rag_service = rag
@@ -287,7 +336,7 @@ def show_upload_section() -> None:
                                             st.session_state.current_repo = repo
                                             st.session_state.repository_loaded = True
                                             st.session_state.messages = []
-                                            st.success("🤖 Agentes inicializados")
+                                            st.success("🤖 **Agentes inicializados**")
                                     else:
                                         st.error("❌ Error en indexación")
                     else:
@@ -297,7 +346,7 @@ def show_upload_section() -> None:
 
 
 def show_chat_section() -> None:
-    """Sección de chat con agentes."""
+    """Seccion de chat con agentes."""
     st.title("💬 Chat con Agentes IA")
     
     if 'current_repo' not in st.session_state or not st.session_state.current_repo:
@@ -312,11 +361,16 @@ def show_chat_section() -> None:
         st.warning("⚠️ **Los agentes no están disponibles**")
         return
     
-    # Verificar modelo disponible
-    selected_model = st.session_state.get('selected_model', 'gemini-2.5-flash')
-    if not _check_quota(selected_model):
-        st.info(f"💡 **Modelo actual:** {selected_model}")
-        st.info("Puedes cambiar el modelo en la pestaña Configuración → Modelos")
+    available, status, message = _check_quota()
+    
+    if not available:
+        if status == "QUOTA_EXCEEDED":
+            _show_quota_warning()
+            st.info("💡 Puedes seguir usando repositorios ya indexados para consultas, pero no se generarán nuevas respuestas hasta que se restablezca la cuota.")
+        elif status == "API_KEY_NOT_CONFIGURED":
+            _show_api_key_warning()
+        else:
+            st.error(message)
         return
     
     if "messages" not in st.session_state:
@@ -368,15 +422,12 @@ def show_chat_section() -> None:
                         st.error("⚠️ **Límite de API alcanzado**")
                         st.info("Las consultas estarán disponibles mañana.")
                         st.session_state.daily_limit_reached = True
-                    elif 'not found' in error_msg or '404' in error_msg:
-                        st.error(f"❌ **Modelo no disponible: {selected_model}**")
-                        st.info("Por favor, selecciona otro modelo en Configuración → Modelos")
                     else:
                         st.error(f"❌ Error: {str(e)}")
 
 
 def show_analysis_section() -> None:
-    """Sección de análisis del repositorio."""
+    """Seccion de analisis del repositorio."""
     st.title("📊 Análisis del Repositorio")
     
     if 'current_repo' not in st.session_state or not st.session_state.current_repo:
@@ -474,9 +525,12 @@ def show_repositories_list() -> None:
             cols[0].write(f"**{repo['name']}**")
             path = Path(repo['path'])
             if path.exists():
-                cols[0].caption("✅ Archivos en disco" if "data/repositories" not in str(path) else "📁 Copia en caché")
+                if "data/repositories" in str(path):
+                    cols[0].caption("📁 Copia en caché")
+                else:
+                    cols[0].caption(f"📁 Original: {repo['path']}")
             else:
-                cols[0].caption("⚠️ No encontrado")
+                cols[0].caption("⚠️ No encontrado en disco")
             cols[1].write(f"📁 {repo['file_count']}")
             cols[2].write(f"📊 {repo['total_lines']}")
             created = repo['created_at']
@@ -484,7 +538,7 @@ def show_repositories_list() -> None:
             cols[3].write(f"🕐 {fecha}")
             if cols[4].button("🗑️ Eliminar", key=f"delete_{repo['id']}"):
                 if st.session_state.repo_service.delete_repository(repo['id']):
-                    st.success(f"Repositorio {repo['name']} eliminado")
+                    st.success(f"✅ Repositorio {repo['name']} eliminado")
                     if 'current_repo' in st.session_state and st.session_state.current_repo:
                         if get_repo_name(st.session_state.current_repo) == repo['name']:
                             st.session_state.current_repo = None
@@ -494,12 +548,12 @@ def show_repositories_list() -> None:
                             st.session_state.messages = []
                     st.rerun()
                 else:
-                    st.error("Error al eliminar")
+                    st.error("❌ Error al eliminar")
             st.divider()
 
 
 def show_configuration_section() -> None:
-    """Configuración con selector de modelos."""
+    """Configuracion con selector de modelos."""
     st.title("⚙️ Configuración")
     
     tab1, tab2, tab3, tab4 = st.tabs(["🔑 API Key", "🤖 Modelos", "📁 Límites", "📊 Sistema"])
@@ -526,7 +580,6 @@ def show_configuration_section() -> None:
             if st.button("🔄 Probar conexión", use_container_width=True):
                 selected_model = st.session_state.get('selected_model', 'gemini-2.5-flash')
                 with st.spinner(f"Probando conexión con modelo {selected_model}..."):
-                    # force_check=True para ignorar caché en prueba manual
                     available, status = ServiceFactory.check_quota_available(selected_model, force_check=True)
                     if available:
                         st.success(f"✅ Conexión exitosa con modelo: {selected_model}")
@@ -580,7 +633,7 @@ def show_configuration_section() -> None:
             with col1:
                 if st.button("🔍 Probar este modelo", use_container_width=True):
                     with st.spinner(f"Probando modelo {selected}..."):
-                        available, status = ServiceFactory.check_quota_available(selected)
+                        available, status = ServiceFactory.check_quota_available(selected, force_check=True)
                         if available:
                             st.success(f"✅ Modelo {selected} funciona correctamente")
                         elif "MODELO_NO_DISPONIBLE" in status:
@@ -597,7 +650,7 @@ def show_configuration_section() -> None:
                         st.session_state.available_models = ServiceFactory.get_available_models(force_refresh=True)
                         st.rerun()
         else:
-            st.error("No se pudieron cargar los modelos. Verifica tu conexión a internet.")
+            st.error("❌ No se pudieron cargar los modelos. Verifica tu conexión a internet.")
     
     with tab3:
         st.subheader("📁 Límites de Procesamiento")
@@ -612,9 +665,9 @@ def show_configuration_section() -> None:
     
     with tab4:
         st.subheader("📊 Sistema")
-        st.write(f"- Repositorios: `{Path('data/repositories').absolute()}`")
-        st.write(f"- Vectores: `{Path('data/vectors').absolute()}`")
-        st.write(f"- Caché: `{Path('data/cache').absolute()}`")
+        st.write(f"- 📁 Repositorios: `{Path('data/repositories').absolute()}`")
+        st.write(f"- 🔍 Vectores: `{Path('data/vectors').absolute()}`")
+        st.write(f"- 🗄️ Caché: `{Path('data/cache').absolute()}`")
         
         if st.button("🧹 Limpiar vectores", use_container_width=True):
             import shutil

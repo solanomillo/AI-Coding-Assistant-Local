@@ -17,7 +17,6 @@ class BaseAgent(ABC):
     Clase base abstracta para todos los agentes.
     """
     
-    # Extensiones soportadas para búsqueda de archivos
     SUPPORTED_EXTENSIONS = {
         '.py', '.js', '.jsx', '.ts', '.tsx', '.html', '.htm',
         '.css', '.scss', '.sass', '.json', '.yaml', '.yml',
@@ -87,7 +86,6 @@ class BaseAgent(ABC):
     def _extract_file_name(self, query: str) -> Optional[str]:
         """
         Extrae el nombre de un archivo de la consulta.
-        Soporta múltiples extensiones: .py, .js, .html, .css, etc.
         
         Args:
             query: Consulta del usuario
@@ -96,11 +94,8 @@ class BaseAgent(ABC):
             Nombre del archivo o None
         """
         query_lower = query.lower()
-        
-        # Construir patrones para todas las extensiones soportadas
         extensions_pattern = '|'.join([re.escape(ext) for ext in self.SUPPORTED_EXTENSIONS])
         
-        # Patrones para detectar archivos
         patterns = [
             rf'archivo\s+([a-zA-Z0-9_\-\.]+(?:{extensions_pattern}))',
             rf'archivo\s+([a-zA-Z0-9_\-\.]+)',
@@ -125,7 +120,6 @@ class BaseAgent(ABC):
     def _get_full_file_content(self, file_name: str) -> Optional[str]:
         """
         Obtiene el contenido completo de un archivo.
-        Soporta búsqueda exacta y parcial del nombre.
         
         Args:
             file_name: Nombre del archivo
@@ -137,9 +131,16 @@ class BaseAgent(ABC):
             logger.warning("Repo path no configurado")
             return None
         
-        logger.debug(f"Buscando archivo: {file_name} en {self.repo_path}")
+        logger.info(f"Buscando archivo: {file_name} en {self.repo_path}")
         
-        # Buscar el archivo exacto
+        all_files_found = []
+        for ext in ['.js', '.html', '.htm', '.css', '.py']:
+            for path in self.repo_path.rglob(f"*{ext}"):
+                if path.is_file():
+                    all_files_found.append(path.name)
+        
+        logger.info(f"Archivos encontrados en el repositorio: {all_files_found}")
+        
         for path in self.repo_path.rglob(file_name):
             if path.is_file():
                 try:
@@ -151,7 +152,6 @@ class BaseAgent(ABC):
                     logger.error(f"Error leyendo archivo {file_name}: {e}")
                     return None
         
-        # Si no se encuentra exacto, buscar por nombre base (sin ruta)
         base_name = Path(file_name).name
         for path in self.repo_path.rglob(base_name):
             if path.is_file():
@@ -162,6 +162,17 @@ class BaseAgent(ABC):
                 except Exception as e:
                     logger.error(f"Error leyendo archivo {path.name}: {e}")
                     continue
+        
+        if '.js' in file_name or file_name.endswith('.js'):
+            for path in self.repo_path.rglob("*.js"):
+                if path.is_file():
+                    try:
+                        content = path.read_text(encoding='utf-8', errors='ignore')
+                        logger.info(f"Archivo JS encontrado por extensión: {path.name} ({len(content)} caracteres)")
+                        return content
+                    except Exception as e:
+                        logger.error(f"Error leyendo archivo {path.name}: {e}")
+                        continue
         
         logger.warning(f"No se encontró el archivo: {file_name}")
         return None
@@ -215,17 +226,22 @@ class BaseAgent(ABC):
     def _retrieve_context(self, query: str, k: int = 5) -> List[Dict[str, Any]]:
         """
         Recupera contexto relevante.
-        Prioriza archivos completos si se mencionan en la consulta.
+        
+        Args:
+            query: Consulta del usuario
+            k: Número de resultados
+            
+        Returns:
+            Lista de fragmentos con contenido
         """
-        # Intentar extraer nombre de archivo de la consulta
         file_name = self._extract_file_name(query)
         
         if file_name:
-            logger.info(f"📄 Archivo específico detectado: {file_name}")
+            logger.info(f"Archivo específico detectado: {file_name}")
             full_content = self._get_full_file_content(file_name)
             if full_content:
                 language = self._get_file_language(file_name)
-                logger.info(f"✅ Archivo completo recuperado: {file_name} ({len(full_content)} caracteres, {language})")
+                logger.info(f"Archivo completo recuperado: {file_name} ({len(full_content)} caracteres, {language})")
                 return [{
                     'id': f"full:{file_name}",
                     'file': file_name,
@@ -235,9 +251,8 @@ class BaseAgent(ABC):
                     'is_full_file': True
                 }]
             else:
-                logger.warning(f"❌ No se pudo recuperar archivo: {file_name}")
+                logger.warning(f"No se pudo recuperar archivo: {file_name}")
         
-        # Detectar consultas generales sobre el repositorio
         query_lower = query.lower()
         general_queries = [
             'qué hace', 'de qué trata', 'resumen', 'qué es', 'explica el repositorio',
@@ -247,36 +262,20 @@ class BaseAgent(ABC):
         
         is_general_query = any(phrase in query_lower for phrase in general_queries)
         
-        # Si es una consulta general, recuperar TODOS los archivos del repositorio
         if is_general_query and self.repo_path:
-            logger.info("🔍 Consulta general detectada - recuperando archivos relevantes")
-            
-            # Definir extensiones a incluir (priorizar HTML, CSS, JS)
-            extensions_to_include = {
-                '.html': 0,
-                '.htm': 0,
-                '.css': 1,
-                '.scss': 1,
-                '.sass': 1,
-                '.js': 2,
-                '.jsx': 2,
-                '.ts': 2,
-                '.tsx': 2,
-                '.py': 3
-            }
+            logger.info("Consulta general detectada - buscando archivos en el repositorio")
             
             all_files = []
+            extensions_to_check = ['.html', '.htm', '.css', '.scss', '.sass', '.js', '.jsx', '.ts', '.tsx', '.py']
             
-            for ext, priority in extensions_to_include.items():
+            for ext in extensions_to_check:
                 for file_path in self.repo_path.rglob(f"*{ext}"):
-                    # Ignorar archivos en directorios comunes
                     if any(ignore in file_path.parts for ignore in ['__pycache__', 'node_modules', 'venv', '.git', 'dist', 'build']):
                         continue
                     
                     try:
                         content = file_path.read_text(encoding='utf-8', errors='ignore')
                         if content.strip():
-                            # Limitar tamaño para no saturar el contexto
                             if len(content) > 2000:
                                 content = content[:2000] + "\n... (contenido truncado)"
                             
@@ -285,25 +284,19 @@ class BaseAgent(ABC):
                                 'path': str(file_path.relative_to(self.repo_path)),
                                 'content': content,
                                 'language': self._get_file_language(file_path.name),
-                                'priority': priority,
                                 'size': len(content)
                             })
-                            logger.debug(f"Archivo encontrado: {file_path.name} ({len(content)} caracteres)")
-                            
+                            logger.info(f"Archivo encontrado: {file_path.name} ({len(content)} caracteres)")
                     except Exception as e:
                         logger.debug(f"Error leyendo {file_path}: {e}")
             
             if all_files:
-                # Ordenar por prioridad (HTML primero, luego CSS, luego JS, luego PY)
-                all_files.sort(key=lambda x: (x['priority'], -x['size']))
-                
-                logger.info(f"📁 Recuperados {len(all_files)} archivos para consulta general")
+                logger.info(f"Recuperados {len(all_files)} archivos para consulta general")
                 for f in all_files:
                     logger.info(f"  - {f['path']} ({f['language']}) - {f['size']} caracteres")
                 
-                # Construir contexto con todos los archivos
                 combined_content = []
-                for f in all_files[:8]:  # Limitar a 8 archivos
+                for f in all_files[:8]:
                     combined_content.append(
                         f"[Archivo: {f['path']} ({f['language']})]\n"
                         f"```{f['language'].lower()}\n"
@@ -320,8 +313,9 @@ class BaseAgent(ABC):
                     'is_full_file': True,
                     'is_repository_summary': True
                 }]
+            else:
+                logger.warning("No se encontraron archivos en el repositorio")
         
-        # Si no es consulta general, usar búsqueda vectorial
         if not self.vector_store:
             logger.warning(f"Vector store no disponible para agente {self.name}")
             return []
@@ -351,7 +345,6 @@ class BaseAgent(ABC):
             
             logger.info(f"FAISS encontró {len(results)} resultados")
             
-            # Recuperar fragmentos completos del caché
             fragments = []
             for r in results:
                 chunk_id = r['id']
@@ -372,7 +365,6 @@ class BaseAgent(ABC):
                 logger.warning("No se recuperaron fragmentos del caché")
                 return []
             
-            # Intentar obtener archivo completo si hay suficientes fragmentos
             if len(fragments) >= 2:
                 fragments_by_file = {}
                 for f in fragments:
@@ -386,7 +378,7 @@ class BaseAgent(ABC):
                     full_content = self._get_full_file_content(best_file)
                     if full_content:
                         language = self._get_file_language(best_file)
-                        logger.info(f"📄 Archivo completo recuperado por fragmentos: {best_file} ({len(full_content)} caracteres)")
+                        logger.info(f"Archivo completo recuperado por fragmentos: {best_file} ({len(full_content)} caracteres)")
                         return [{
                             'id': f"full:{best_file}",
                             'file': best_file,
@@ -418,7 +410,7 @@ class BaseAgent(ABC):
         context_parts = []
         
         for i, f in enumerate(fragments):
-            language_info = f.get('language', 'código')
+            language_info = f.get('language', 'codigo')
             
             if f.get('is_full_file'):
                 if f.get('is_repository_summary'):
@@ -444,9 +436,8 @@ class BaseAgent(ABC):
         full_context = "\n---\n".join(context_parts)
         logger.info(f"Contexto construido: {len(full_context)} caracteres, {len(fragments)} fragmentos")
         
-        # Si el contexto es muy grande, truncar
         if len(full_context) > 15000:
-            logger.warning(f"Contexto muy grande ({len(full_context)} caracteres), truncando a 15000...")
+            logger.warning(f"Contexto muy grande ({len(full_context)} caracteres), truncando...")
             full_context = full_context[:15000] + "\n... (contexto truncado)"
         
         return full_context
@@ -469,24 +460,24 @@ class BaseAgent(ABC):
         
         prompt = f"""{instructions}
 
-                    {repo_info}
-                    CONTEXTO DEL CÓDIGO:
-                    {context}
+{repo_info}
+CONTEXTO DEL CODIGO:
+{context}
 
-                    CONSULTA DEL USUARIO:
-                    {query}
+CONSULTA DEL USUARIO:
+{query}
 
-                    INSTRUCCIONES ADICIONALES:
-                    - Analiza TODO el código proporcionado en el contexto
-                    - Si se proporciona un resumen del repositorio, analiza todos los archivos incluidos
-                    - Identifica el lenguaje de programación de cada archivo
-                    - Responde basándote ÚNICAMENTE en el código que ves
-                    - Si el código no está presente, indícalo claramente
-                    - Sé técnico y preciso
-                    - Usa formato de código con ``` y especifica el lenguaje
-                    - Responde en español
+INSTRUCCIONES ADICIONALES:
+- Analiza TODO el codigo proporcionado en el contexto
+- Si se proporciona un resumen del repositorio, analiza todos los archivos incluidos
+- Identifica el lenguaje de programacion de cada archivo
+- Responde basandote UNICAMENTE en el codigo que ves
+- Si el codigo no esta presente, indicarlo claramente
+- Ser tecnico y preciso
+- Usar formato de codigo con ``` y especificar el lenguaje
+- Responder en español
 
-                    RESPUESTA:"""
+RESPUESTA:"""
         
         logger.info(f"Prompt construido: {len(prompt)} caracteres")
         return prompt

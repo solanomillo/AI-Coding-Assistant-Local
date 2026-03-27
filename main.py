@@ -13,13 +13,17 @@ import streamlit as st
 from datetime import datetime
 import os
 from dotenv import load_dotenv
-from application.services.service_factory import ServiceFactory
-from application.graph.workflow import AgentWorkflow
 
-# Cargar variables de entorno
+from interface.streamlit.app import (
+    show_upload_section,
+    show_analysis_section,
+    show_chat_section,
+    show_repositories_list,
+    show_configuration_section
+)
+
 load_dotenv()
 
-# Configurar logging
 log_level = os.getenv("LOG_LEVEL", "INFO").upper()
 log_format = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 
@@ -36,30 +40,17 @@ logger = logging.getLogger(__name__)
 
 
 def setup_project_structure() -> None:
-    """
-    Verifica y crea la estructura de directorios necesaria para el proyecto.
-    """
+    """Verifica y crea la estructura de directorios necesaria."""
     logger.info("Verificando estructura de directorios...")
     
     required_dirs = [
-        "data/repositories",
-        "data/vectors",
-        "data/cache",
-        "data/cache/files",
-        "data/cache/metadata",
-        "data/temp",
-        "interface/streamlit",
-        "application/agents",
-        "application/services",
-        "application/graph",
-        "domain/models",
-        "infrastructure/embeddings",
-        "infrastructure/vector_db",
-        "infrastructure/llm",
-        "infrastructure/database",
-        "infrastructure/parsers",
-        "scripts",
-        "logs"
+        "data/repositories", "data/vectors", "data/cache",
+        "data/cache/files", "data/cache/metadata", "data/temp",
+        "interface/streamlit", "application/agents", "application/services",
+        "application/graph", "domain/models", "infrastructure/embeddings",
+        "infrastructure/vector_db", "infrastructure/llm",
+        "infrastructure/database", "infrastructure/parsers",
+        "scripts", "logs"
     ]
     
     for dir_path in required_dirs:
@@ -74,78 +65,60 @@ def setup_project_structure() -> None:
 
 
 def get_repo_name(repo: Union[Dict[str, Any], Any]) -> str:
-    """Obtiene el nombre del repositorio de manera segura."""
+    """Obtiene el nombre del repositorio."""
     if isinstance(repo, dict):
         return repo.get('name', 'desconocido')
-    else:
-        return getattr(repo, 'name', 'desconocido')
+    return getattr(repo, 'name', 'desconocido')
 
 
 def get_repo_file_count(repo: Union[Dict[str, Any], Any]) -> int:
-    """Obtiene el número de archivos del repositorio de manera segura."""
+    """Obtiene el numero de archivos."""
     if isinstance(repo, dict):
         return repo.get('file_count', 0)
-    else:
-        if hasattr(repo, 'files'):
-            return len(repo.files)
-        return getattr(repo, 'file_count', 0)
+    if hasattr(repo, 'files'):
+        return len(repo.files)
+    return getattr(repo, 'file_count', 0)
 
 
 def get_repo_total_lines(repo: Union[Dict[str, Any], Any]) -> int:
-    """Obtiene el total de líneas del repositorio de manera segura."""
+    """Obtiene el total de lineas."""
     if isinstance(repo, dict):
         return repo.get('total_lines', 0)
-    else:
-        return getattr(repo, 'total_lines', 0)
+    return getattr(repo, 'total_lines', 0)
 
 
 def initialize_session_state() -> None:
-    """
-    Inicializa las variables de estado de la sesión de Streamlit.
-    """
+    """Inicializa las variables de estado de la sesion."""
     if 'repository_loaded' not in st.session_state:
         st.session_state.repository_loaded = False
-    
     if 'current_repo' not in st.session_state:
         st.session_state.current_repo = None
-    
     if 'repo_service' not in st.session_state:
         from application.services.repo_service import RepositoryService
         st.session_state.repo_service = RepositoryService()
         logger.info("Servicio de repositorios inicializado")
-    
     if 'rag_service' not in st.session_state:
         st.session_state.rag_service = None
-    
     if 'agent_workflow' not in st.session_state:
         st.session_state.agent_workflow = None
-    
     if 'selected_model' not in st.session_state:
         st.session_state.selected_model = "gemini-2.5-flash"
-    
     if 'temperature' not in st.session_state:
         st.session_state.temperature = 0.2
-    
     if 'k_results' not in st.session_state:
         st.session_state.k_results = 5
-    
     if 'max_file_size_mb' not in st.session_state:
         st.session_state.max_file_size_mb = 1
-    
     if 'include_docs' not in st.session_state:
         st.session_state.include_docs = False
-    
     if 'messages' not in st.session_state:
         st.session_state.messages = []
-    
     if 'daily_limit_reached' not in st.session_state:
         st.session_state.daily_limit_reached = False
 
 
 def show_welcome_page() -> None:
-    """
-    Muestra la página de bienvenida con información del sistema.
-    """
+    """Muestra la pagina de bienvenida."""
     st.title("🤖 AI Coding Assistant Local")
     st.markdown("---")
     
@@ -153,10 +126,9 @@ def show_welcome_page() -> None:
         st.error("⚠️ **Límite diario de API alcanzado**")
         st.info("Las consultas estarán disponibles mañana. Puedes seguir usando repositorios ya indexados.")
     
-    # Mostrar modelo seleccionado
     model_info = st.session_state.get('selected_model', 'gemini-2.5-flash')
-    model_emoji = "⭐" if "pro" in model_info.lower() else "⚡"
-    st.caption(f"🤖 Modelo actual: {model_emoji} `{model_info}`")
+    model_type = "⭐ PRO" if "pro" in model_info.lower() else "⚡ FLASH"
+    st.caption(f"🤖 Modelo actual: {model_type} `{model_info}`")
     
     col1, col2, col3 = st.columns(3)
     
@@ -223,7 +195,8 @@ def show_welcome_page() -> None:
                 
                 with cols[4]:
                     if st.button("Cargar", key=f"welcome_load_{repo['id']}"):
-                        
+                        from application.services.service_factory import ServiceFactory
+                        from application.graph.workflow import AgentWorkflow
                         
                         path = Path(repo['path'])
                         if path.exists():
@@ -270,7 +243,7 @@ def show_welcome_page() -> None:
             with col3:
                 st.metric("📊 Uso", f"{cache_stats['usage_percent']:.1f}%")
         except Exception as e:
-            logger.debug(f"Error obteniendo estadísticas de caché: {e}")
+            logger.debug(f"Error obteniendo estadisticas de cache: {e}")
         
         st.markdown("**🌐 Lenguajes soportados:**")
         languages = ["Python", "JavaScript", "TypeScript", "HTML", "CSS", "SCSS", "JSON", "SQL", "Shell", "Go", "Rust", "Java", "C++", "Ruby", "PHP"]
@@ -297,15 +270,13 @@ def show_welcome_page() -> None:
 
 
 def main() -> NoReturn:
-    """
-    Función principal que inicia la aplicación Streamlit.
-    """
+    """Funcion principal que inicia la aplicacion."""
     logger.info("Iniciando AI Coding Assistant Local...")
     
     setup_project_structure()
     
     st.set_page_config(
-        page_title="AI Coding Assistant",
+        page_title="🤖 AI Coding Assistant",
         page_icon="🤖",
         layout="wide",
         initial_sidebar_state="expanded"
@@ -356,24 +327,19 @@ def main() -> NoReturn:
         st.markdown("---")
         st.caption("v1.0.0 | Gemini + FAISS")
         st.caption("Multi-lenguaje | Agentes LangGraph")
-        st.caption(f"Modelo: {st.session_state.get('selected_model', 'gemini-2.5-flash')}")
+        st.caption(f"🤖 Modelo: {st.session_state.get('selected_model', 'gemini-2.5-flash')}")
     
     if page == "🏠 Inicio":
         show_welcome_page()
     elif page == "📤 Cargar Repositorio":
-        from interface.streamlit.app import show_upload_section
         show_upload_section()
     elif page == "📊 Analizar":
-        from interface.streamlit.app import show_analysis_section
         show_analysis_section()
     elif page == "💬 Chat":
-        from interface.streamlit.app import show_chat_section
         show_chat_section()
     elif page == "📚 Repositorios":
-        from interface.streamlit.app import show_repositories_list
         show_repositories_list()
     else:
-        from interface.streamlit.app import show_configuration_section
         show_configuration_section()
     
     logger.debug("Página renderizada correctamente")
