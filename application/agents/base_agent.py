@@ -222,11 +222,11 @@ class BaseAgent(ABC):
         file_name = self._extract_file_name(query)
         
         if file_name:
-            logger.info(f"Archivo específico detectado: {file_name}")
+            logger.info(f"📄 Archivo específico detectado: {file_name}")
             full_content = self._get_full_file_content(file_name)
             if full_content:
                 language = self._get_file_language(file_name)
-                logger.info(f"Archivo completo recuperado: {file_name} ({len(full_content)} caracteres, {language})")
+                logger.info(f"✅ Archivo completo recuperado: {file_name} ({len(full_content)} caracteres, {language})")
                 return [{
                     'id': f"full:{file_name}",
                     'file': file_name,
@@ -238,51 +238,67 @@ class BaseAgent(ABC):
             else:
                 logger.warning(f"❌ No se pudo recuperar archivo: {file_name}")
         
-        # NUEVO: Detectar si es una consulta general sobre el repositorio
+        # DETECTAR CONSULTAS GENERALES SOBRE EL REPOSITORIO
         query_lower = query.lower()
         general_queries = [
             'qué hace', 'de qué trata', 'resumen', 'qué es', 'explica el repositorio',
-            'qué hace este proyecto', 'descripción', 'funcionalidad', 'propósito'
+            'qué hace este proyecto', 'descripción', 'funcionalidad', 'propósito',
+            'qué contiene', 'qué archivos', 'estructura'
         ]
         
         is_general_query = any(phrase in query_lower for phrase in general_queries)
         
-        # Si es una consulta general, intentar obtener TODOS los archivos del repositorio
+        # Si es una consulta general, recuperar TODOS los archivos del repositorio
         if is_general_query and self.repo_path:
-            logger.info("🔍 Consulta general detectada - recuperando archivos relevantes del repositorio")
+            logger.info("🔍 Consulta general detectada - recuperando archivos relevantes")
             
-            # Obtener archivos del repositorio
+            # Definir extensiones a incluir (priorizar HTML, CSS, JS)
+            extensions_to_include = {
+                '.html': 0,
+                '.css': 1,
+                '.js': 2,
+                '.py': 3
+            }
+            
             all_files = []
-            extensions_to_include = ['.py', '.js', '.html', '.css', '.jsx', '.ts', '.tsx']
             
-            for ext in extensions_to_include:
+            for ext, priority in extensions_to_include.items():
                 for file_path in self.repo_path.rglob(f"*{ext}"):
-                    if self._should_ignore_file(file_path):
+                    # Ignorar archivos en directorios comunes
+                    if any(ignore in file_path.parts for ignore in ['__pycache__', 'node_modules', 'venv', '.git']):
                         continue
+                    
                     try:
                         content = file_path.read_text(encoding='utf-8', errors='ignore')
                         if content.strip():
                             # Limitar tamaño para no saturar el contexto
-                            if len(content) > 3000:
-                                content = content[:3000] + "\n... (contenido truncado)"
+                            if len(content) > 2000:
+                                content = content[:2000] + "\n... (contenido truncado)"
+                            
                             all_files.append({
                                 'file': file_path.name,
                                 'path': str(file_path.relative_to(self.repo_path)),
                                 'content': content,
-                                'language': self._get_file_language(file_path.name)
+                                'language': self._get_file_language(file_path.name),
+                                'priority': priority,
+                                'size': len(content)
                             })
+                            logger.debug(f"Archivo encontrado: {file_path.name} ({len(content)} caracteres)")
+                            
                     except Exception as e:
                         logger.debug(f"Error leyendo {file_path}: {e}")
             
             if all_files:
-                logger.info(f"Recuperados {len(all_files)} archivos para consulta general")
-                # Ordenar por tipo (HTML, CSS, JS, PY) para mejor contexto
-                priority_order = {'.html': 0, '.css': 1, '.js': 2, '.py': 3}
-                all_files.sort(key=lambda x: priority_order.get(Path(x['file']).suffix, 4))
+                # Ordenar por prioridad (HTML primero, luego CSS, luego JS)
+                all_files.sort(key=lambda x: (x['priority'], -x['size']))
+                
+                logger.info(f"📁 Recuperados {len(all_files)} archivos para consulta general")
+                for f in all_files:
+                    logger.info(f"  - {f['path']} ({f['language']}) - {f['size']} caracteres")
                 
                 # Construir contexto con todos los archivos
                 combined_content = []
-                for f in all_files[:5]:  # Limitar a 5 archivos para no exceder contexto
+                for f in all_files[:8]:  # Limitar a 8 archivos
                     combined_content.append(
                         f"[Archivo: {f['path']} ({f['language']})]\n"
                         f"```{f['language'].lower()}\n"
@@ -300,7 +316,7 @@ class BaseAgent(ABC):
                     'is_repository_summary': True
                 }]
         
-        # Si no hay archivo específico ni consulta general, usar búsqueda vectorial
+        # Si no es consulta general, usar búsqueda vectorial
         if not self.vector_store:
             logger.warning(f"Vector store no disponible para agente {self.name}")
             return []
@@ -379,7 +395,8 @@ class BaseAgent(ABC):
             return fragments[:k]
             
         except Exception as e:
-            logger.error(f"Error recuperando contexto: {e}")            
+            logger.error(f"Error recuperando contexto: {e}")
+            import traceback
             logger.error(traceback.format_exc())
             return []
     
