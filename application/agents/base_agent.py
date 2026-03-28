@@ -6,7 +6,7 @@ Define la interfaz común y funcionalidades compartidas.
 import logging
 import re
 from abc import ABC, abstractmethod
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Tuple
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -25,13 +25,16 @@ class BaseAgent(ABC):
         '.md', '.txt', '.rst'
     }
     
+    # Palabras clave para consultas generales
+    GENERAL_QUERY_KEYWORDS = [
+        'qué hace', 'de qué trata', 'resumen', 'qué es', 'explica el repositorio',
+        'qué hace este proyecto', 'descripción', 'funcionalidad', 'propósito',
+        'qué contiene', 'qué archivos', 'estructura', 'que hace', 'que es'
+    ]
+    
     def __init__(self, name: str, description: str):
         """
         Inicializa el agente base.
-        
-        Args:
-            name: Nombre del agente
-            description: Descripción de su función
         """
         self.name = name
         self.description = description
@@ -44,55 +47,44 @@ class BaseAgent(ABC):
         logger.info(f"Agente '{name}' inicializado: {description}")
     
     def set_llm(self, llm) -> None:
-        """Establece el cliente LLM para el agente."""
         self.llm = llm
         logger.debug(f"LLM configurado para agente {self.name}")
     
     def set_vector_store(self, vector_store) -> None:
-        """Establece el vector store para búsqueda de contexto."""
         self.vector_store = vector_store
         logger.debug(f"Vector store configurado para agente {self.name}")
     
     def set_embedding_service(self, embedding_service) -> None:
-        """Establece el servicio de embeddings."""
         self.embedding_service = embedding_service
         logger.debug(f"Embedding service configurado para agente {self.name}")
     
     def set_cache_service(self, cache_service) -> None:
-        """Establece el servicio de caché para recuperar fragmentos completos."""
         self.cache_service = cache_service
         logger.debug(f"Cache service configurado para agente {self.name}")
     
     def set_repo_path(self, repo_path: Path) -> None:
-        """Establece la ruta del repositorio para leer archivos completos."""
         self.repo_path = repo_path
         logger.debug(f"Repo path configurado para agente {self.name}")
     
     def set_repo_context(self, repo_context: Dict[str, Any]) -> None:
-        """Establece el contexto del repositorio."""
         self.repo_context = repo_context
         logger.debug(f"Contexto de repositorio configurado para agente {self.name}")
     
     @abstractmethod
     def can_handle(self, query: str) -> bool:
-        """Determina si este agente puede manejar la consulta."""
         pass
     
     @abstractmethod
     def process(self, query: str, context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        """Procesa la consulta y genera respuesta."""
         pass
     
+    def _is_general_query(self, query: str) -> bool:
+        """Determina si la consulta es general sobre el repositorio."""
+        query_lower = query.lower()
+        return any(phrase in query_lower for phrase in self.GENERAL_QUERY_KEYWORDS)
+    
     def _extract_file_name(self, query: str) -> Optional[str]:
-        """
-        Extrae el nombre de un archivo de la consulta.
-        
-        Args:
-            query: Consulta del usuario
-            
-        Returns:
-            Nombre del archivo o None
-        """
+        """Extrae el nombre de un archivo de la consulta."""
         query_lower = query.lower()
         extensions_pattern = '|'.join([re.escape(ext) for ext in self.SUPPORTED_EXTENSIONS])
         
@@ -103,9 +95,6 @@ class BaseAgent(ABC):
             rf'en\s+([a-zA-Z0-9_\-\.]+(?:{extensions_pattern}))',
             rf'de\s+([a-zA-Z0-9_\-\.]+(?:{extensions_pattern}))',
             rf'el\s+archivo\s+([a-zA-Z0-9_\-\.]+(?:{extensions_pattern}))',
-            rf'la\s+función\s+en\s+([a-zA-Z0-9_\-\.]+(?:{extensions_pattern}))',
-            rf'el\s+código\s+en\s+([a-zA-Z0-9_\-\.]+(?:{extensions_pattern}))',
-            rf'el\s+estilo\s+en\s+([a-zA-Z0-9_\-\.]+(?:{extensions_pattern}))',
         ]
         
         for pattern in patterns:
@@ -118,35 +107,18 @@ class BaseAgent(ABC):
         return None
     
     def _get_full_file_content(self, file_name: str) -> Optional[str]:
-        """
-        Obtiene el contenido completo de un archivo.
-        
-        Args:
-            file_name: Nombre del archivo
-            
-        Returns:
-            Contenido completo del archivo o None
-        """
+        """Obtiene el contenido completo de un archivo."""
         if not self.repo_path:
             logger.warning("Repo path no configurado")
             return None
         
-        logger.info(f"Buscando archivo: {file_name} en {self.repo_path}")
-        
-        all_files_found = []
-        for ext in ['.js', '.html', '.htm', '.css', '.py']:
-            for path in self.repo_path.rglob(f"*{ext}"):
-                if path.is_file():
-                    all_files_found.append(path.name)
-        
-        logger.info(f"Archivos encontrados en el repositorio: {all_files_found}")
+        logger.debug(f"Buscando archivo: {file_name} en {self.repo_path}")
         
         for path in self.repo_path.rglob(file_name):
             if path.is_file():
                 try:
                     content = path.read_text(encoding='utf-8', errors='ignore')
-                    ext = path.suffix.lower()
-                    logger.info(f"Archivo completo recuperado: {file_name} ({len(content)} caracteres, {ext})")
+                    logger.info(f"Archivo completo recuperado: {file_name} ({len(content)} caracteres)")
                     return content
                 except Exception as e:
                     logger.error(f"Error leyendo archivo {file_name}: {e}")
@@ -163,85 +135,238 @@ class BaseAgent(ABC):
                     logger.error(f"Error leyendo archivo {path.name}: {e}")
                     continue
         
-        if '.js' in file_name or file_name.endswith('.js'):
-            for path in self.repo_path.rglob("*.js"):
-                if path.is_file():
-                    try:
-                        content = path.read_text(encoding='utf-8', errors='ignore')
-                        logger.info(f"Archivo JS encontrado por extensión: {path.name} ({len(content)} caracteres)")
-                        return content
-                    except Exception as e:
-                        logger.error(f"Error leyendo archivo {path.name}: {e}")
-                        continue
-        
         logger.warning(f"No se encontró el archivo: {file_name}")
         return None
     
     def _get_file_language(self, file_name: str) -> str:
-        """
-        Determina el lenguaje de un archivo por su extensión.
-        
-        Args:
-            file_name: Nombre del archivo
-            
-        Returns:
-            Nombre del lenguaje
-        """
+        """Determina el lenguaje de un archivo por su extensión."""
         ext = Path(file_name).suffix.lower()
         
         language_map = {
-            '.py': 'Python',
-            '.js': 'JavaScript',
-            '.jsx': 'React JSX',
-            '.ts': 'TypeScript',
-            '.tsx': 'React TypeScript',
-            '.html': 'HTML',
-            '.htm': 'HTML',
-            '.css': 'CSS',
-            '.scss': 'SCSS',
-            '.sass': 'SASS',
-            '.json': 'JSON',
-            '.yaml': 'YAML',
-            '.yml': 'YAML',
-            '.sql': 'SQL',
-            '.sh': 'Shell Script',
-            '.bash': 'Bash Script',
-            '.go': 'Go',
-            '.rs': 'Rust',
-            '.java': 'Java',
-            '.cpp': 'C++',
-            '.c': 'C',
-            '.h': 'C/C++ Header',
-            '.hpp': 'C++ Header',
-            '.rb': 'Ruby',
-            '.php': 'PHP',
-            '.vue': 'Vue.js',
-            '.md': 'Markdown',
-            '.txt': 'Texto Plano',
-            '.rst': 'reStructuredText'
+            '.py': 'Python', '.js': 'JavaScript', '.jsx': 'React JSX',
+            '.ts': 'TypeScript', '.tsx': 'React TypeScript',
+            '.html': 'HTML', '.htm': 'HTML', '.css': 'CSS',
+            '.scss': 'SCSS', '.sass': 'SASS', '.json': 'JSON',
+            '.yaml': 'YAML', '.yml': 'YAML', '.sql': 'SQL',
+            '.sh': 'Shell Script', '.bash': 'Bash Script', '.go': 'Go',
+            '.rs': 'Rust', '.java': 'Java', '.cpp': 'C++', '.c': 'C',
+            '.h': 'C/C++ Header', '.hpp': 'C++ Header', '.rb': 'Ruby',
+            '.php': 'PHP', '.vue': 'Vue.js', '.md': 'Markdown',
+            '.txt': 'Texto Plano', '.rst': 'reStructuredText'
         }
         
         return language_map.get(ext, 'Desconocido')
     
+    def _extract_file_summary(self, file_path: Path, content: str, language: str) -> Dict[str, Any]:
+        """
+        Extrae un resumen compacto de un archivo.
+        Optimizado para minimizar tokens en consultas generales.
+        """
+        summary = {
+            'name': file_path.name,
+            'path': str(file_path.relative_to(self.repo_path)) if self.repo_path else file_path.name,
+            'language': language,
+            'size': len(content),
+            'line_count': content.count('\n') + 1,
+            'purpose': self._infer_file_purpose(file_path.name, language),
+            'key_elements': []
+        }
+        
+        # HTML: extraer título, meta tags, estructura principal
+        if language == 'HTML':
+            title_match = re.search(r'<title[^>]*>(.*?)</title>', content, re.IGNORECASE | re.DOTALL)
+            if title_match:
+                summary['title'] = title_match.group(1).strip()
+            
+            # Extraer scripts y estilos
+            script_count = len(re.findall(r'<script', content, re.IGNORECASE))
+            link_count = len(re.findall(r'<link[^>]*stylesheet', content, re.IGNORECASE))
+            summary['key_elements'] = [f"{script_count} scripts", f"{link_count} estilos"]
+            
+            # Extraer estructura principal (h1, main, header, footer)
+            main_tags = []
+            for tag in ['h1', 'h2', 'main', 'header', 'footer', 'nav']:
+                if re.search(f'<{tag}[^>]*>', content, re.IGNORECASE):
+                    main_tags.append(tag)
+            if main_tags:
+                summary['structure'] = main_tags
+        
+        # CSS: extraer variables, clases principales, media queries
+        elif language == 'CSS':
+            variables = re.findall(r'--[a-zA-Z0-9_-]+:', content)
+            if variables:
+                summary['variables_count'] = len(set(variables))
+            
+            classes = re.findall(r'\.([a-zA-Z0-9_-]+)\s*\{', content)
+            if classes:
+                summary['classes_count'] = len(set(classes))
+                summary['main_classes'] = list(set(classes))[:5]
+            
+            media_count = len(re.findall(r'@media', content, re.IGNORECASE))
+            if media_count:
+                summary['media_queries'] = media_count
+        
+        # JavaScript: extraer funciones, clases, eventos
+        elif language == 'JavaScript':
+            functions = re.findall(r'function\s+([a-zA-Z_$][a-zA-Z0-9_$]*)\s*\(', content)
+            arrow_funcs = re.findall(r'(?:const|let|var)\s+([a-zA-Z_$][a-zA-Z0-9_$]*)\s*=\s*\([^)]*\)\s*=>', content)
+            all_funcs = list(set(functions + arrow_funcs))
+            if all_funcs:
+                summary['functions'] = all_funcs[:8]
+                summary['functions_count'] = len(all_funcs)
+            
+            classes = re.findall(r'class\s+([a-zA-Z_$][a-zA-Z0-9_$]*)', content)
+            if classes:
+                summary['classes'] = classes[:5]
+                summary['classes_count'] = len(classes)
+            
+            event_listeners = re.findall(r'\.(addEventListener|onclick|onload|onchange)\s*\(', content)
+            if event_listeners:
+                summary['events'] = list(set(event_listeners))
+        
+        # Python: extraer funciones, clases, imports
+        elif language == 'Python':
+            functions = re.findall(r'def\s+([a-zA-Z_][a-zA-Z0-9_]*)\s*\(', content)
+            if functions:
+                summary['functions'] = functions[:8]
+                summary['functions_count'] = len(functions)
+            
+            classes = re.findall(r'class\s+([a-zA-Z_][a-zA-Z0-9_]*)\s*[:\(]', content)
+            if classes:
+                summary['classes'] = classes[:5]
+                summary['classes_count'] = len(classes)
+            
+            imports = re.findall(r'^(?:from\s+(\S+)\s+import|import\s+(\S+))', content, re.MULTILINE)
+            if imports:
+                summary['imports_count'] = len(imports)
+        
+        return summary
+    
+    def _infer_file_purpose(self, filename: str, language: str) -> str:
+        """Infiera el propósito del archivo por su nombre."""
+        name_lower = filename.lower()
+        
+        # Mapeo de nombres comunes
+        purpose_map = {
+            'index': 'Página principal de la aplicación',
+            'main': 'Punto de entrada principal',
+            'app': 'Lógica principal de la aplicación',
+            'style': 'Estilos visuales de la interfaz',
+            'styles': 'Estilos visuales de la interfaz',
+            'script': 'Funcionalidad JavaScript',
+            'utils': 'Utilidades y funciones auxiliares',
+            'helpers': 'Funciones de ayuda',
+            'config': 'Configuración del proyecto',
+            'routes': 'Definición de rutas',
+            'models': 'Modelos de datos',
+            'views': 'Vistas de la aplicación',
+            'controllers': 'Controladores de la aplicación',
+            'service': 'Servicios de la aplicación'
+        }
+        
+        for key, purpose in purpose_map.items():
+            if key in name_lower:
+                return purpose
+        
+        # Por defecto
+        if language == 'HTML':
+            return 'Documento HTML que define la estructura de la página'
+        elif language == 'CSS':
+            return 'Hoja de estilos para el diseño visual'
+        elif language == 'JavaScript':
+            return 'Código JavaScript con funcionalidad interactiva'
+        elif language == 'Python':
+            return 'Módulo Python con lógica de negocio'
+        
+        return f'Archivo {language}'
+    
+    def _generate_repository_summary(self) -> Dict[str, Any]:
+        """
+        Genera un resumen compacto del repositorio completo.
+        """
+        if not self.repo_path:
+            return {'files': [], 'total_files': 0}
+        
+        files_summary = []
+        extensions_to_check = ['.html', '.htm', '.css', '.scss', '.sass', '.js', '.jsx', '.ts', '.tsx', '.py']
+        
+        for ext in extensions_to_check:
+            for file_path in self.repo_path.rglob(f"*{ext}"):
+                if any(ignore in file_path.parts for ignore in ['__pycache__', 'node_modules', 'venv', '.git', 'dist', 'build']):
+                    continue
+                
+                try:
+                    content = file_path.read_text(encoding='utf-8', errors='ignore')
+                    if content.strip():
+                        language = self._get_file_language(file_path.name)
+                        summary = self._extract_file_summary(file_path, content, language)
+                        files_summary.append(summary)
+                        logger.debug(f"Resumen generado: {file_path.name} ({language})")
+                except Exception as e:
+                    logger.debug(f"Error procesando {file_path}: {e}")
+        
+        # Ordenar por tipo (HTML, CSS, JS, PY)
+        priority = {'HTML': 0, 'CSS': 1, 'JavaScript': 2, 'Python': 3}
+        files_summary.sort(key=lambda x: priority.get(x['language'], 4))
+        
+        return {
+            'files': files_summary,
+            'total_files': len(files_summary),
+            'total_size': sum(f['size'] for f in files_summary)
+        }
+    
+    def _build_compact_context(self, repo_summary: Dict[str, Any]) -> str:
+        """
+        Construye un contexto compacto a partir del resumen del repositorio.
+        """
+        context_parts = []
+        
+        context_parts.append(f"El repositorio contiene {repo_summary['total_files']} archivos:\n")
+        
+        for file in repo_summary['files'][:8]:  # Limitar a 8 archivos
+            file_info = f"- **{file['path']}** ({file['language']}, {file['line_count']} líneas)"
+            
+            if file.get('purpose'):
+                file_info += f"\n  Propósito: {file['purpose']}"
+            
+            if file.get('title'):
+                file_info += f"\n  Título: {file['title']}"
+            
+            if file.get('functions'):
+                func_list = ', '.join(file['functions'][:5])
+                file_info += f"\n  Funciones: {func_list}"
+                if file['functions_count'] > 5:
+                    file_info += f" (+{file['functions_count'] - 5} más)"
+            
+            if file.get('classes'):
+                class_list = ', '.join(file['classes'][:3])
+                file_info += f"\n  Clases: {class_list}"
+            
+            if file.get('main_classes'):
+                file_info += f"\n  Clases CSS: {', '.join(file['main_classes'][:5])}"
+            
+            if file.get('key_elements'):
+                file_info += f"\n  Elementos: {', '.join(file['key_elements'])}"
+            
+            if file.get('events'):
+                file_info += f"\n  Eventos: {', '.join(file['events'][:3])}"
+            
+            context_parts.append(file_info)
+        
+        return "\n\n".join(context_parts)
+    
     def _retrieve_context(self, query: str, k: int = 5) -> List[Dict[str, Any]]:
         """
         Recupera contexto relevante.
-        
-        Args:
-            query: Consulta del usuario
-            k: Número de resultados
-            
-        Returns:
-            Lista de fragmentos con contenido
         """
         file_name = self._extract_file_name(query)
         
+        # Caso 1: Archivo específico mencionado
         if file_name:
             logger.info(f"Archivo específico detectado: {file_name}")
             full_content = self._get_full_file_content(file_name)
             if full_content:
                 language = self._get_file_language(file_name)
-                logger.info(f"Archivo completo recuperado: {file_name} ({len(full_content)} caracteres, {language})")
                 return [{
                     'id': f"full:{file_name}",
                     'file': file_name,
@@ -250,82 +375,30 @@ class BaseAgent(ABC):
                     'score': 1.0,
                     'is_full_file': True
                 }]
-            else:
-                logger.warning(f"No se pudo recuperar archivo: {file_name}")
         
-        query_lower = query.lower()
-        general_queries = [
-            'qué hace', 'de qué trata', 'resumen', 'qué es', 'explica el repositorio',
-            'qué hace este proyecto', 'descripción', 'funcionalidad', 'propósito',
-            'qué contiene', 'qué archivos', 'estructura', 'que hace', 'que es'
-        ]
-        
-        is_general_query = any(phrase in query_lower for phrase in general_queries)
-        
-        if is_general_query and self.repo_path:
-            logger.info("Consulta general detectada - buscando archivos en el repositorio")
+        # Caso 2: Consulta general sobre el repositorio
+        if self._is_general_query(query) and self.repo_path:
+            logger.info("Consulta general detectada - generando resumen compacto")
             
-            all_files = []
-            extensions_to_check = ['.html', '.htm', '.css', '.scss', '.sass', '.js', '.jsx', '.ts', '.tsx', '.py']
+            repo_summary = self._generate_repository_summary()
             
-            for ext in extensions_to_check:
-                for file_path in self.repo_path.rglob(f"*{ext}"):
-                    if any(ignore in file_path.parts for ignore in ['__pycache__', 'node_modules', 'venv', '.git', 'dist', 'build']):
-                        continue
-                    
-                    try:
-                        content = file_path.read_text(encoding='utf-8', errors='ignore')
-                        if content.strip():
-                            if len(content) > 2000:
-                                content = content[:2000] + "\n... (contenido truncado)"
-                            
-                            all_files.append({
-                                'file': file_path.name,
-                                'path': str(file_path.relative_to(self.repo_path)),
-                                'content': content,
-                                'language': self._get_file_language(file_path.name),
-                                'size': len(content)
-                            })
-                            logger.info(f"Archivo encontrado: {file_path.name} ({len(content)} caracteres)")
-                    except Exception as e:
-                        logger.debug(f"Error leyendo {file_path}: {e}")
-            
-            if all_files:
-                logger.info(f"Recuperados {len(all_files)} archivos para consulta general")
-                for f in all_files:
-                    logger.info(f"  - {f['path']} ({f['language']}) - {f['size']} caracteres")
-                
-                combined_content = []
-                for f in all_files[:8]:
-                    combined_content.append(
-                        f"[Archivo: {f['path']} ({f['language']})]\n"
-                        f"```{f['language'].lower()}\n"
-                        f"{f['content']}\n"
-                        f"```\n"
-                    )
+            if repo_summary['files']:
+                compact_context = self._build_compact_context(repo_summary)
+                logger.info(f"Resumen generado: {repo_summary['total_files']} archivos, {len(compact_context)} caracteres")
                 
                 return [{
                     'id': "full:repository_summary",
                     'file': "resumen_repositorio",
-                    'content': "\n---\n".join(combined_content),
+                    'content': compact_context,
                     'language': "multi",
                     'score': 1.0,
                     'is_full_file': True,
                     'is_repository_summary': True
                 }]
-            else:
-                logger.warning("No se encontraron archivos en el repositorio")
         
-        if not self.vector_store:
-            logger.warning(f"Vector store no disponible para agente {self.name}")
-            return []
-        
-        if not self.embedding_service:
-            logger.warning(f"Embedding service no disponible para agente {self.name}")
-            return []
-        
-        if not self.cache_service:
-            logger.warning(f"Cache service no disponible para agente {self.name}")
+        # Caso 3: Búsqueda vectorial para consultas específicas
+        if not self.vector_store or not self.embedding_service or not self.cache_service:
+            logger.warning("Servicios no disponibles para búsqueda vectorial")
             return []
         
         try:
@@ -336,11 +409,10 @@ class BaseAgent(ABC):
                 logger.error(f"Dimensión incorrecta: {len(query_vector)}")
                 return []
             
-            logger.debug(f"Buscando en FAISS con k={k}...")
             results = self.vector_store.search(query_vector, k=k)
             
             if not results:
-                logger.debug("No se encontraron resultados en FAISS")
+                logger.debug("No se encontraron resultados")
                 return []
             
             logger.info(f"FAISS encontró {len(results)} resultados")
@@ -359,53 +431,16 @@ class BaseAgent(ABC):
                         'score': r['score']
                     })
             
-            logger.info(f"Recuperados {len(fragments)} fragmentos del caché")
-            
-            if not fragments:
-                logger.warning("No se recuperaron fragmentos del caché")
-                return []
-            
-            if len(fragments) >= 2:
-                fragments_by_file = {}
-                for f in fragments:
-                    file = f['file']
-                    if file not in fragments_by_file:
-                        fragments_by_file[file] = []
-                    fragments_by_file[file].append(f)
-                
-                best_file = max(fragments_by_file.keys(), key=lambda x: len(fragments_by_file[x]))
-                if len(fragments_by_file[best_file]) >= 2:
-                    full_content = self._get_full_file_content(best_file)
-                    if full_content:
-                        language = self._get_file_language(best_file)
-                        logger.info(f"Archivo completo recuperado por fragmentos: {best_file} ({len(full_content)} caracteres)")
-                        return [{
-                            'id': f"full:{best_file}",
-                            'file': best_file,
-                            'content': full_content,
-                            'language': language,
-                            'score': 1.0,
-                            'is_full_file': True
-                        }]
-            
-            logger.debug(f"Retornando {len(fragments)} fragmentos para {self.name}")
+            logger.info(f"Recuperados {len(fragments)} fragmentos")
             return fragments[:k]
             
         except Exception as e:
             logger.error(f"Error recuperando contexto: {e}")
-            import traceback
-            logger.error(traceback.format_exc())
             return []
     
     def _build_context_text(self, fragments: List[Dict[str, Any]]) -> str:
         """
         Construye texto de contexto a partir de fragmentos.
-        
-        Args:
-            fragments: Lista de fragmentos recuperados
-            
-        Returns:
-            Texto de contexto formateado
         """
         context_parts = []
         
@@ -437,7 +472,7 @@ class BaseAgent(ABC):
         logger.info(f"Contexto construido: {len(full_context)} caracteres, {len(fragments)} fragmentos")
         
         if len(full_context) > 15000:
-            logger.warning(f"Contexto muy grande ({len(full_context)} caracteres), truncando...")
+            logger.warning(f"Contexto muy grande, truncando...")
             full_context = full_context[:15000] + "\n... (contexto truncado)"
         
         return full_context
@@ -445,14 +480,6 @@ class BaseAgent(ABC):
     def _build_prompt(self, query: str, context: str, instructions: str) -> str:
         """
         Construye prompt para el LLM.
-        
-        Args:
-            query: Consulta del usuario
-            context: Contexto recuperado
-            instructions: Instrucciones específicas del agente
-            
-        Returns:
-            Prompt completo
         """
         repo_info = ""
         if self.repo_context:
