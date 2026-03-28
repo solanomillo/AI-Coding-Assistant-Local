@@ -12,6 +12,7 @@ from typing import Union, Dict, Any, List, Tuple
 
 from application.services.repo_service import RepositoryService
 from application.services.service_factory import ServiceFactory
+from application.graph.workflow import AgentWorkflow
 
 logger = logging.getLogger(__name__)
 
@@ -112,8 +113,22 @@ def _show_api_key_warning() -> None:
     """)
 
 
-def _setup_services(repo) -> Tuple[bool, Any, Any]:
-    """Configura los servicios para un repositorio."""
+def _setup_services(repo) -> Tuple[bool, Any, Any, str]:
+    """
+    Configura los servicios para un repositorio.
+    Retorna (success, rag_service, agent_workflow, message)
+    """
+    # Verificar cuota primero
+    available, status, message = _check_quota()
+    
+    if not available:
+        if status == "QUOTA_EXCEEDED":
+            return False, None, None, "⚠️ Límite diario de API alcanzado. No se puede crear el servicio RAG hasta mañana."
+        elif status == "API_KEY_NOT_CONFIGURED":
+            return False, None, None, "🔑 API Key no configurada. Ve a Configuración para agregarla."
+        else:
+            return False, None, None, f"❌ Error: {message}"
+    
     rag_service, agent_workflow = ServiceFactory.setup_repository_services(
         repo=repo,
         model_name=st.session_state.get('selected_model', 'gemini-2.5-flash'),
@@ -121,10 +136,13 @@ def _setup_services(repo) -> Tuple[bool, Any, Any]:
         include_docs=st.session_state.get('include_docs', False)
     )
     
-    if rag_service is None or agent_workflow is None:
-        return False, None, None
+    if rag_service is None:
+        return False, None, None, "❌ No se pudo crear el servicio RAG. Verifica tu API key y conexión."
     
-    return True, rag_service, agent_workflow
+    if agent_workflow is None:
+        return False, None, None, "❌ No se pudo crear el flujo de agentes."
+    
+    return True, rag_service, agent_workflow, ""
 
 
 def _show_repository_stats(repo) -> None:
@@ -201,15 +219,11 @@ def show_upload_section() -> None:
                                 st.warning("⚠️ **Repositorio ya existente**")
                                 st.info("📦 Cargado desde caché.")
                                 
-                                avail, stat, msg = _check_quota()
-                                if not avail:
-                                    if stat == "QUOTA_EXCEEDED":
-                                        _show_quota_warning()
-                                    else:
-                                        st.error(msg)
+                                success, rag, agent, error_msg = _setup_services(repo)
+                                if not success:
+                                    st.error(error_msg)
                                     return
                                 
-                                success, rag, agent = _setup_services(repo)
                                 if success:
                                     st.session_state.rag_service = rag
                                     st.session_state.agent_workflow = agent
@@ -247,7 +261,11 @@ def show_upload_section() -> None:
                                     
                                     if rag.index_repository(repo):
                                         st.success("✅ **Indexación completada**")
-                                        success, rag, agent = _setup_services(repo)
+                                        success, rag, agent, error_msg = _setup_services(repo)
+                                        if not success:
+                                            st.error(error_msg)
+                                            return
+                                        
                                         if success:
                                             st.session_state.rag_service = rag
                                             st.session_state.agent_workflow = agent
@@ -285,15 +303,11 @@ def show_upload_section() -> None:
                             if index_path.exists():
                                 st.warning("⚠️ **Repositorio ya existente**")
                                 
-                                avail, stat, msg = _check_quota()
-                                if not avail:
-                                    if stat == "QUOTA_EXCEEDED":
-                                        _show_quota_warning()
-                                    else:
-                                        st.error(msg)
+                                success, rag, agent, error_msg = _setup_services(repo)
+                                if not success:
+                                    st.error(error_msg)
                                     return
                                 
-                                success, rag, agent = _setup_services(repo)
                                 if success:
                                     st.session_state.rag_service = rag
                                     st.session_state.agent_workflow = agent
@@ -331,7 +345,11 @@ def show_upload_section() -> None:
                                     
                                     if rag.index_repository(repo):
                                         st.success("✅ **Indexación completada**")
-                                        success, rag, agent = _setup_services(repo)
+                                        success, rag, agent, error_msg = _setup_services(repo)
+                                        if not success:
+                                            st.error(error_msg)
+                                            return
+                                        
                                         if success:
                                             st.session_state.rag_service = rag
                                             st.session_state.agent_workflow = agent
