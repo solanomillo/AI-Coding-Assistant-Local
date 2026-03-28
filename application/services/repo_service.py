@@ -199,7 +199,7 @@ class RepositoryService:
     
     def load_from_zip(self, zip_path: Union[str, Path]) -> Optional[Repository]:
         """
-        Carga repositorio desde ZIP. Verifica API antes de analizar.
+        Carga repositorio desde ZIP.
         """
         zip_path = Path(zip_path)
         if not zip_path.exists():
@@ -208,13 +208,25 @@ class RepositoryService:
         
         logger.info(f"Procesando ZIP: {zip_path.name}")
         
+        # Obtener el nombre original del archivo ZIP (sin extensión)
+        # Si el nombre tiene espacios, guiones bajos, etc., se sanitiza después
+        original_name = zip_path.stem
+        
+        #Limpiar el nombre para que sea más legible
+        # Reemplazar guiones bajos y guiones por espacios para mostrarlo bonito
+        display_name = original_name.replace('_', ' ').replace('-', ' ')
+        # Capitalizar cada palabra
+        display_name = ' '.join(word.capitalize() for word in display_name.split())
+        
+        logger.info(f"Nombre original del repositorio: {original_name}")
+        logger.info(f"Nombre para mostrar: {display_name}")
+        
         if not self._is_api_available():
             logger.warning("API no disponible - repositorio no procesado")
             return None
         
         try:
-            repo_name = zip_path.stem
-            safe_name = self._sanitize_name(repo_name)
+            safe_name = self._sanitize_name(original_name)
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             temp_dir = self.repositories_dir / f"{safe_name}_{timestamp}"
             temp_dir.mkdir(parents=True)
@@ -225,13 +237,15 @@ class RepositoryService:
             final_path = self._detect_repo_root(temp_dir)
             logger.info(f"Raíz del repositorio: {final_path}")
             
+            # Verificar si ya existe por la ruta (no por nombre)
             existing = self.db.get_repository_by_path(str(final_path))
             if existing:
                 logger.info(f"Repositorio ya existe en BD con ID: {existing['id']}")
                 shutil.rmtree(temp_dir)
                 return self.load_repository_from_db(existing['id'])
             
-            repository = self._analyze_directory(final_path, repo_name)
+            # Usar el nombre original (más legible) para el repositorio
+            repository = self._analyze_directory(final_path, display_name)
             
             if not repository or not repository.files:
                 logger.error("No se encontraron archivos válidos")
@@ -241,9 +255,10 @@ class RepositoryService:
             repo_id = self.db.save_repository(repository)
             repository.db_id = repo_id
             logger.info(f"Repositorio guardado en BD con ID: {repo_id}")
+            logger.info(f"Nombre guardado: {repository.name}")
             
             return repository
-                
+                    
         except Exception as e:
             logger.error(f"Error procesando ZIP: {e}")
             if 'temp_dir' in locals() and temp_dir.exists():
@@ -252,12 +267,15 @@ class RepositoryService:
     
     def load_from_directory(self, directory_path: Union[str, Path]) -> Optional[Repository]:
         """
-        Carga repositorio desde directorio local. Verifica API antes de analizar.
+        Carga repositorio desde directorio local.
         """
         directory_path = Path(directory_path)
         if not directory_path.exists() or not directory_path.is_dir():
             logger.error(f"Directorio no válido: {directory_path}")
             return None
+        
+        # Usar el nombre del directorio como nombre del repositorio
+        repo_name = directory_path.name
         
         if not self._is_api_available():
             logger.warning("API no disponible - repositorio no procesado")
@@ -268,7 +286,6 @@ class RepositoryService:
             logger.info(f"Repositorio ya existe en BD con ID: {existing['id']}")
             return self.load_repository_from_db(existing['id'])
         
-        repo_name = directory_path.name
         logger.info(f"Cargando desde directorio: {directory_path}")
         
         repository = self._analyze_directory(directory_path, repo_name)
