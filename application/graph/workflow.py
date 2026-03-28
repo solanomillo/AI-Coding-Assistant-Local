@@ -270,14 +270,14 @@ class AgentWorkflow:
         """
         instructions = """Eres un experto en analisis de codigo. Tu tarea es proporcionar un resumen claro y completo del repositorio.
 
-                    CARACTERISTICAS:
-                    - Explica que hace el repositorio en general
-                    - Menciona los tipos de archivos presentes (HTML, CSS, JavaScript, etc.)
-                    - Describe la estructura y funcionalidad principal
-                    - Si hay archivos de diferentes lenguajes, mencionarlos todos
-                    - NO muestres codigo, solo describe la funcionalidad
-                    - Ser conciso pero completo
-                    - Responder en español"""
+CARACTERISTICAS:
+- Explica que hace el repositorio en general
+- Menciona los tipos de archivos presentes (HTML, CSS, JavaScript, etc.)
+- Describe la estructura y funcionalidad principal
+- Si hay archivos de diferentes lenguajes, mencionarlos todos
+- NO muestres codigo, solo describe la funcionalidad
+- Ser conciso pero completo
+- Responder en español"""
 
         agent = self._create_summary_agent()
         prompt = agent._build_prompt(query, context_text, instructions)

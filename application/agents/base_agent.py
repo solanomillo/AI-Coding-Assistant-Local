@@ -25,6 +25,33 @@ class BaseAgent(ABC):
         '.md', '.txt', '.rst'
     }
     
+    # Directorios a ignorar (archivos confidenciales y del sistema)
+    IGNORE_DIRS = {
+        'venv', 'env', '.venv', '.env', '__pycache__',
+        'node_modules', '.git', '.idea', '.vscode',
+        'dist', 'build', 'target', 'logs', 'tmp', 'temp',
+        '.github', '.gitlab', '.circleci', 'assets', 'images',
+        'migrations', '.pytest_cache', '.mypy_cache',
+        'staticfiles', 'media', 'locale', 'site-packages',
+        'lib', 'Lib', 'include', 'Scripts', 'bin',
+        '.pytest', '.tox', '.coverage', 'htmlcov',
+        '.eggs', '.cache', '.mypy_cache'
+    }
+    
+    # Archivos a ignorar (confidenciales o no relevantes)
+    IGNORE_FILES = {
+        '.env', '.gitignore', '.dockerignore', '.eslintignore',
+        'package-lock.json', 'yarn.lock', 'poetry.lock',
+        'requirements.txt', 'Pipfile', 'pyproject.toml',
+        '*.pyc', '*.pyo', '*.so', '*.dll', '*.exe',
+        '*.png', '*.jpg', '*.jpeg', '*.gif', '*.ico', '*.svg',
+        '*.mp4', '*.mp3', '*.pdf', '*.doc', '*.docx',
+        '*.log', '*.tmp', '*.cache', '*.db', '*.sqlite',
+        '.DS_Store', 'Thumbs.db',
+        'settings.py', 'local_settings.py', 'secrets.py',
+        'config.py', 'credentials.json', 'service-account.json'
+    }
+    
     # Palabras clave para consultas generales
     GENERAL_QUERY_KEYWORDS = [
         'qué hace', 'de qué trata', 'resumen', 'qué es', 'explica el repositorio',
@@ -79,6 +106,28 @@ class BaseAgent(ABC):
     def process(self, query: str, context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         pass
     
+    def _should_ignore_path(self, file_path: Path) -> bool:
+        """
+        Determina si una ruta debe ser ignorada.
+        Verifica directorios y archivos confidenciales.
+        """
+        # Verificar directorios a ignorar
+        for ignore_dir in self.IGNORE_DIRS:
+            if ignore_dir in file_path.parts:
+                return True
+        
+        # Verificar archivos a ignorar
+        file_name = file_path.name
+        if file_name in self.IGNORE_FILES:
+            return True
+        
+        # Verificar patrones de archivos
+        for pattern in self.IGNORE_FILES:
+            if pattern.startswith('*') and file_name.endswith(pattern[1:]):
+                return True
+        
+        return False
+    
     def _is_general_query(self, query: str) -> bool:
         """
         Determina si la consulta es general sobre el repositorio.
@@ -129,7 +178,7 @@ class BaseAgent(ABC):
         logger.debug(f"Buscando archivo: {file_name} en {self.repo_path}")
         
         for path in self.repo_path.rglob(file_name):
-            if path.is_file():
+            if path.is_file() and not self._should_ignore_path(path):
                 try:
                     content = path.read_text(encoding='utf-8', errors='ignore')
                     logger.info(f"Archivo completo recuperado: {file_name} ({len(content)} caracteres)")
@@ -140,7 +189,7 @@ class BaseAgent(ABC):
         
         base_name = Path(file_name).name
         for path in self.repo_path.rglob(base_name):
-            if path.is_file():
+            if path.is_file() and not self._should_ignore_path(path):
                 try:
                     content = path.read_text(encoding='utf-8', errors='ignore')
                     logger.info(f"Archivo encontrado por nombre base: {path.name} ({len(content)} caracteres)")
@@ -285,16 +334,18 @@ class BaseAgent(ABC):
     def _generate_repository_summary(self) -> Dict[str, Any]:
         """
         Genera un resumen compacto del repositorio completo.
+        Ignora directorios y archivos confidenciales.
         """
         if not self.repo_path:
             return {'files': [], 'total_files': 0}
         
         files_summary = []
-        extensions_to_check = ['.html', '.htm', '.css', '.scss', '.sass', '.js', '.jsx', '.ts', '.tsx', '.py']
+        extensions_to_check = ['.py', '.js', '.jsx', '.ts', '.tsx', '.html', '.htm', '.css', '.scss', '.sass']
         
         for ext in extensions_to_check:
             for file_path in self.repo_path.rglob(f"*{ext}"):
-                if any(ignore in file_path.parts for ignore in ['__pycache__', 'node_modules', 'venv', '.git', 'dist', 'build']):
+                # Ignorar archivos y directorios no deseados
+                if self._should_ignore_path(file_path):
                     continue
                 
                 try:
@@ -307,8 +358,11 @@ class BaseAgent(ABC):
                 except Exception as e:
                     logger.debug(f"Error procesando {file_path}: {e}")
         
+        # Ordenar por tipo
         priority = {'HTML': 0, 'CSS': 1, 'JavaScript': 2, 'Python': 3}
         files_summary.sort(key=lambda x: priority.get(x['language'], 4))
+        
+        logger.info(f"Resumen generado: {len(files_summary)} archivos")
         
         return {
             'files': files_summary,
