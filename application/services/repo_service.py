@@ -208,27 +208,14 @@ class RepositoryService:
         
         logger.info(f"Procesando ZIP: {zip_path.name}")
         
-        # Obtener el nombre original del archivo ZIP (sin extensión)
-        # Si el nombre tiene espacios, guiones bajos, etc., se sanitiza después
-        original_name = zip_path.stem
-        
-        #Limpiar el nombre para que sea más legible
-        # Reemplazar guiones bajos y guiones por espacios para mostrarlo bonito
-        display_name = original_name.replace('_', ' ').replace('-', ' ')
-        # Capitalizar cada palabra
-        display_name = ' '.join(word.capitalize() for word in display_name.split())
-        
-        logger.info(f"Nombre original del repositorio: {original_name}")
-        logger.info(f"Nombre para mostrar: {display_name}")
-        
         if not self._is_api_available():
             logger.warning("API no disponible - repositorio no procesado")
             return None
         
         try:
-            safe_name = self._sanitize_name(original_name)
+            repo_name = self._sanitize_name(zip_path.stem)
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            temp_dir = self.repositories_dir / f"{safe_name}_{timestamp}"
+            temp_dir = self.repositories_dir / f"{repo_name}_{timestamp}"
             temp_dir.mkdir(parents=True)
             
             with zipfile.ZipFile(zip_path, 'r') as zip_ref:
@@ -237,18 +224,86 @@ class RepositoryService:
             final_path = self._detect_repo_root(temp_dir)
             logger.info(f"Raíz del repositorio: {final_path}")
             
-            # Verificar si ya existe por la ruta (no por nombre)
             existing = self.db.get_repository_by_path(str(final_path))
             if existing:
                 logger.info(f"Repositorio ya existe en BD con ID: {existing['id']}")
                 shutil.rmtree(temp_dir)
                 return self.load_repository_from_db(existing['id'])
             
-            # Usar el nombre original (más legible) para el repositorio
-            repository = self._analyze_directory(final_path, display_name)
+            repository = self._analyze_directory(final_path, repo_name)
             
             if not repository or not repository.files:
                 logger.error("No se encontraron archivos válidos")
+                shutil.rmtree(temp_dir)
+                return None
+            
+            repo_id = self.db.save_repository(repository)
+            repository.db_id = repo_id
+            logger.info(f"Repositorio guardado en BD con ID: {repo_id}")
+            
+            return repository
+                    
+        except Exception as e:
+            logger.error(f"Error procesando ZIP: {e}")
+            if 'temp_dir' in locals() and temp_dir.exists():
+                shutil.rmtree(temp_dir)
+            return None
+    
+    def load_from_zip_with_name(self, zip_path: Union[str, Path], original_name: str) -> Optional[Repository]:
+        """
+        Carga repositorio desde ZIP usando el nombre original del archivo.
+        
+        Args:
+            zip_path: Ruta al archivo ZIP temporal
+            original_name: Nombre original del archivo (sin la ruta)
+            
+        Returns:
+            Repositorio analizado
+        """
+        zip_path = Path(zip_path)
+        if not zip_path.exists():
+            logger.error(f"Archivo ZIP no encontrado: {zip_path}")
+            return None
+        
+        logger.info(f"Procesando ZIP: {original_name}")
+        logger.info(f"Ruta temporal: {zip_path}")
+        
+        # Usar el nombre original del archivo
+        repo_base_name = Path(original_name).stem
+        
+        # Limpiar el nombre para mostrar
+        display_name = repo_base_name.replace('_', ' ').replace('-', ' ')
+        display_name = ' '.join(word.capitalize() for word in display_name.split())
+        
+        logger.info(f"Nombre del repositorio: {repo_base_name}")
+        logger.info(f"Nombre para mostrar: {display_name}")
+        
+        if not self._is_api_available():
+            logger.warning("API no disponible - repositorio no procesado")
+            return None
+        
+        try:
+            safe_name = self._sanitize_name(repo_base_name)
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            temp_dir = self.repositories_dir / f"{safe_name}_{timestamp}"
+            temp_dir.mkdir(parents=True)
+            
+            with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+                zip_ref.extractall(temp_dir)
+            
+            final_path = self._detect_repo_root(temp_dir)
+            logger.info(f"Raiz del repositorio: {final_path}")
+            
+            existing = self.db.get_repository_by_path(str(final_path))
+            if existing:
+                logger.info(f"Repositorio ya existe en BD con ID: {existing['id']}")
+                shutil.rmtree(temp_dir)
+                return self.load_repository_from_db(existing['id'])
+            
+            repository = self._analyze_directory(final_path, display_name)
+            
+            if not repository or not repository.files:
+                logger.error("No se encontraron archivos validos")
                 shutil.rmtree(temp_dir)
                 return None
             

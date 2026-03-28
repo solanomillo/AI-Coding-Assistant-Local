@@ -178,12 +178,10 @@ class BaseAgent(ABC):
             if title_match:
                 summary['title'] = title_match.group(1).strip()
             
-            # Extraer scripts y estilos
             script_count = len(re.findall(r'<script', content, re.IGNORECASE))
             link_count = len(re.findall(r'<link[^>]*stylesheet', content, re.IGNORECASE))
             summary['key_elements'] = [f"{script_count} scripts", f"{link_count} estilos"]
             
-            # Extraer estructura principal (h1, main, header, footer)
             main_tags = []
             for tag in ['h1', 'h2', 'main', 'header', 'footer', 'nav']:
                 if re.search(f'<{tag}[^>]*>', content, re.IGNORECASE):
@@ -246,37 +244,35 @@ class BaseAgent(ABC):
         """Infiera el propósito del archivo por su nombre."""
         name_lower = filename.lower()
         
-        # Mapeo de nombres comunes
         purpose_map = {
-            'index': 'Página principal de la aplicación',
+            'index': 'Pagina principal de la aplicacion',
             'main': 'Punto de entrada principal',
-            'app': 'Lógica principal de la aplicación',
+            'app': 'Logica principal de la aplicacion',
             'style': 'Estilos visuales de la interfaz',
             'styles': 'Estilos visuales de la interfaz',
             'script': 'Funcionalidad JavaScript',
             'utils': 'Utilidades y funciones auxiliares',
             'helpers': 'Funciones de ayuda',
-            'config': 'Configuración del proyecto',
-            'routes': 'Definición de rutas',
+            'config': 'Configuracion del proyecto',
+            'routes': 'Definicion de rutas',
             'models': 'Modelos de datos',
-            'views': 'Vistas de la aplicación',
-            'controllers': 'Controladores de la aplicación',
-            'service': 'Servicios de la aplicación'
+            'views': 'Vistas de la aplicacion',
+            'controllers': 'Controladores de la aplicacion',
+            'service': 'Servicios de la aplicacion'
         }
         
         for key, purpose in purpose_map.items():
             if key in name_lower:
                 return purpose
         
-        # Por defecto
         if language == 'HTML':
-            return 'Documento HTML que define la estructura de la página'
+            return 'Documento HTML que define la estructura de la pagina'
         elif language == 'CSS':
-            return 'Hoja de estilos para el diseño visual'
+            return 'Hoja de estilos para el diseno visual'
         elif language == 'JavaScript':
-            return 'Código JavaScript con funcionalidad interactiva'
+            return 'Codigo JavaScript con funcionalidad interactiva'
         elif language == 'Python':
-            return 'Módulo Python con lógica de negocio'
+            return 'Modulo Python con logica de negocio'
         
         return f'Archivo {language}'
     
@@ -305,7 +301,6 @@ class BaseAgent(ABC):
                 except Exception as e:
                     logger.debug(f"Error procesando {file_path}: {e}")
         
-        # Ordenar por tipo (HTML, CSS, JS, PY)
         priority = {'HTML': 0, 'CSS': 1, 'JavaScript': 2, 'Python': 3}
         files_summary.sort(key=lambda x: priority.get(x['language'], 4))
         
@@ -323,20 +318,20 @@ class BaseAgent(ABC):
         
         context_parts.append(f"El repositorio contiene {repo_summary['total_files']} archivos:\n")
         
-        for file in repo_summary['files'][:8]:  # Limitar a 8 archivos
-            file_info = f"- **{file['path']}** ({file['language']}, {file['line_count']} líneas)"
+        for file in repo_summary['files'][:8]:
+            file_info = f"- **{file['path']}** ({file['language']}, {file['line_count']} lineas)"
             
             if file.get('purpose'):
-                file_info += f"\n  Propósito: {file['purpose']}"
+                file_info += f"\n  Proposito: {file['purpose']}"
             
             if file.get('title'):
-                file_info += f"\n  Título: {file['title']}"
+                file_info += f"\n  Titulo: {file['title']}"
             
             if file.get('functions'):
                 func_list = ', '.join(file['functions'][:5])
                 file_info += f"\n  Funciones: {func_list}"
                 if file['functions_count'] > 5:
-                    file_info += f" (+{file['functions_count'] - 5} más)"
+                    file_info += f" (+{file['functions_count'] - 5} mas)"
             
             if file.get('classes'):
                 class_list = ', '.join(file['classes'][:3])
@@ -348,9 +343,6 @@ class BaseAgent(ABC):
             if file.get('key_elements'):
                 file_info += f"\n  Elementos: {', '.join(file['key_elements'])}"
             
-            if file.get('events'):
-                file_info += f"\n  Eventos: {', '.join(file['events'][:3])}"
-            
             context_parts.append(file_info)
         
         return "\n\n".join(context_parts)
@@ -361,9 +353,9 @@ class BaseAgent(ABC):
         """
         file_name = self._extract_file_name(query)
         
-        # Caso 1: Archivo específico mencionado
+        # Caso 1: Archivo especifico mencionado
         if file_name:
-            logger.info(f"Archivo específico detectado: {file_name}")
+            logger.info(f"Archivo especifico detectado: {file_name}")
             full_content = self._get_full_file_content(file_name)
             if full_content:
                 language = self._get_file_language(file_name)
@@ -396,9 +388,9 @@ class BaseAgent(ABC):
                     'is_repository_summary': True
                 }]
         
-        # Caso 3: Búsqueda vectorial para consultas específicas
+        # Caso 3: Busqueda vectorial para consultas especificas
         if not self.vector_store or not self.embedding_service or not self.cache_service:
-            logger.warning("Servicios no disponibles para búsqueda vectorial")
+            logger.warning("Servicios no disponibles para busqueda vectorial")
             return []
         
         try:

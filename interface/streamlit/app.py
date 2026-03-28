@@ -12,7 +12,6 @@ from typing import Union, Dict, Any, List, Tuple
 
 from application.services.repo_service import RepositoryService
 from application.services.service_factory import ServiceFactory
-from application.graph.workflow import AgentWorkflow
 
 logger = logging.getLogger(__name__)
 
@@ -182,13 +181,16 @@ def show_upload_section() -> None:
         )
         
         if uploaded_file:
+            original_filename = uploaded_file.name
+            st.info(f"📄 **Archivo subido:** {original_filename}")
+            
             with tempfile.NamedTemporaryFile(delete=False, suffix='.zip') as tmp_file:
                 tmp_file.write(uploaded_file.getvalue())
                 tmp_path = tmp_file.name
             
             with st.spinner("📁 Procesando repositorio..."):
                 try:
-                    repo = st.session_state.repo_service.load_from_zip(tmp_path)
+                    repo = st.session_state.repo_service.load_from_zip_with_name(tmp_path, original_filename)
                     
                     if repo:
                         if hasattr(repo, 'db_id') and repo.db_id:
