@@ -252,13 +252,6 @@ class RepositoryService:
     def load_from_zip_with_name(self, zip_path: Union[str, Path], original_name: str) -> Optional[Repository]:
         """
         Carga repositorio desde ZIP usando el nombre original del archivo.
-        
-        Args:
-            zip_path: Ruta al archivo ZIP temporal
-            original_name: Nombre original del archivo (sin la ruta)
-            
-        Returns:
-            Repositorio analizado
         """
         zip_path = Path(zip_path)
         if not zip_path.exists():
@@ -294,11 +287,30 @@ class RepositoryService:
             final_path = self._detect_repo_root(temp_dir)
             logger.info(f"Raiz del repositorio: {final_path}")
             
-            existing = self.db.get_repository_by_path(str(final_path))
-            if existing:
-                logger.info(f"Repositorio ya existe en BD con ID: {existing['id']}")
+            # Verificar si el repositorio ya existe por nombre
+            existing_by_name = None
+            repos = self.db.list_repositories()
+            for repo in repos:
+                if repo['name'].lower() == display_name.lower():
+                    existing_by_name = repo
+                    logger.info(f"Repositorio encontrado por nombre: {existing_by_name['name']} (ID: {existing_by_name['id']})")
+                    break
+            
+            if existing_by_name:
+                existing_path = Path(existing_by_name['path'])
+                if existing_path.exists():
+                    logger.info(f"Repositorio ya existe, cargando desde BD: {existing_by_name['name']}")
+                    shutil.rmtree(temp_dir)
+                    return self.load_repository_from_db(existing_by_name['id'])
+                else:
+                    logger.warning(f"Repositorio existe en BD pero la ruta no existe, se recreara")
+            
+            # Verificar si ya existe por ruta
+            existing_by_path = self.db.get_repository_by_path(str(final_path))
+            if existing_by_path:
+                logger.info(f"Repositorio ya existe por ruta con ID: {existing_by_path['id']}")
                 shutil.rmtree(temp_dir)
-                return self.load_repository_from_db(existing['id'])
+                return self.load_repository_from_db(existing_by_path['id'])
             
             repository = self._analyze_directory(final_path, display_name)
             
@@ -367,8 +379,15 @@ class RepositoryService:
             
             repo_path = Path(repo_data['path'])
             if not repo_path.exists():
-                logger.error(f"Ruta de repositorio no existe: {repo_path}")
-                return None
+                logger.warning(f"Ruta de repositorio no existe: {repo_path}, intentando localizar...")
+                safe_name = self._sanitize_name(repo_data['name'])
+                possible_paths = list(self.repositories_dir.glob(f"{safe_name}*"))
+                if possible_paths:
+                    repo_path = possible_paths[0]
+                    logger.info(f"Repositorio encontrado en: {repo_path}")
+                else:
+                    logger.error(f"No se pudo localizar el repositorio: {repo_data['name']}")
+                    return None
             
             repository = Repository(
                 name=repo_data['name'],
@@ -387,6 +406,7 @@ class RepositoryService:
                 file_path = repo_path / file_data['file_path']
                 
                 if not file_path.exists():
+                    logger.debug(f"Archivo no encontrado en disco: {file_path}")
                     continue
                 
                 try:

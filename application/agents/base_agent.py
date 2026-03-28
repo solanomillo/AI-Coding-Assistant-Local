@@ -276,70 +276,141 @@ class BaseAgent(ABC):
         
         return f'Archivo {language}'
     
-    def _generate_repository_summary(self) -> Dict[str, Any]:
+    def _extract_file_summary(self, file_path: Path, content: str, language: str) -> Dict[str, Any]:
         """
-        Genera un resumen compacto del repositorio completo.
+        Extrae un resumen compacto de un archivo.
+        Optimizado para minimizar tokens en consultas generales.
         """
-        if not self.repo_path:
-            return {'files': [], 'total_files': 0}
-        
-        files_summary = []
-        extensions_to_check = ['.html', '.htm', '.css', '.scss', '.sass', '.js', '.jsx', '.ts', '.tsx', '.py']
-        
-        for ext in extensions_to_check:
-            for file_path in self.repo_path.rglob(f"*{ext}"):
-                if any(ignore in file_path.parts for ignore in ['__pycache__', 'node_modules', 'venv', '.git', 'dist', 'build']):
-                    continue
-                
-                try:
-                    content = file_path.read_text(encoding='utf-8', errors='ignore')
-                    if content.strip():
-                        language = self._get_file_language(file_path.name)
-                        summary = self._extract_file_summary(file_path, content, language)
-                        files_summary.append(summary)
-                        logger.debug(f"Resumen generado: {file_path.name} ({language})")
-                except Exception as e:
-                    logger.debug(f"Error procesando {file_path}: {e}")
-        
-        priority = {'HTML': 0, 'CSS': 1, 'JavaScript': 2, 'Python': 3}
-        files_summary.sort(key=lambda x: priority.get(x['language'], 4))
-        
-        return {
-            'files': files_summary,
-            'total_files': len(files_summary),
-            'total_size': sum(f['size'] for f in files_summary)
+        summary = {
+            'name': file_path.name,
+            'path': str(file_path.relative_to(self.repo_path)) if self.repo_path else file_path.name,
+            'language': language,
+            'size': len(content),
+            'line_count': content.count('\n') + 1,
+            'purpose': self._infer_file_purpose(file_path.name, language),
+            'key_elements': []
         }
+        
+        # HTML: extraer título, meta tags, estructura principal
+        if language == 'HTML':
+            title_match = re.search(r'<title[^>]*>(.*?)</title>', content, re.IGNORECASE | re.DOTALL)
+            if title_match:
+                summary['title'] = title_match.group(1).strip()
+            
+            script_count = len(re.findall(r'<script', content, re.IGNORECASE))
+            link_count = len(re.findall(r'<link[^>]*stylesheet', content, re.IGNORECASE))
+            summary['key_elements'] = [f"{script_count} scripts", f"{link_count} estilos"]
+            
+            main_tags = []
+            for tag in ['h1', 'h2', 'main', 'header', 'footer', 'nav']:
+                if re.search(f'<{tag}[^>]*>', content, re.IGNORECASE):
+                    main_tags.append(tag)
+            if main_tags:
+                summary['structure'] = main_tags
+        
+        # CSS: extraer variables, clases principales, media queries
+        elif language == 'CSS':
+            variables = re.findall(r'--[a-zA-Z0-9_-]+:', content)
+            if variables:
+                summary['variables_count'] = len(set(variables))
+            
+            classes = re.findall(r'\.([a-zA-Z0-9_-]+)\s*\{', content)
+            if classes:
+                summary['classes_count'] = len(set(classes))
+                summary['main_classes'] = list(set(classes))[:5]
+            
+            media_count = len(re.findall(r'@media', content, re.IGNORECASE))
+            if media_count:
+                summary['media_queries'] = media_count
+        
+        # JavaScript: extraer funciones, clases, eventos (mejorado)
+        elif language == 'JavaScript':
+            # Funciones declaradas: function nombre() {}
+            functions = re.findall(r'function\s+([a-zA-Z_$][a-zA-Z0-9_$]*)\s*\(', content)
+            # Funciones flecha asignadas: const nombre = () => {}
+            arrow_funcs = re.findall(r'(?:const|let|var)\s+([a-zA-Z_$][a-zA-Z0-9_$]*)\s*=\s*\([^)]*\)\s*=>', content)
+            # Funciones flecha sin asignación: () => {}
+            all_funcs = list(set(functions + arrow_funcs))
+            if all_funcs:
+                summary['functions'] = all_funcs[:8]
+                summary['functions_count'] = len(all_funcs)
+            
+            # Clases
+            classes = re.findall(r'class\s+([a-zA-Z_$][a-zA-Z0-9_$]*)', content)
+            if classes:
+                summary['classes'] = classes[:5]
+                summary['classes_count'] = len(classes)
+            
+            # Variables globales (const, let, var a nivel raíz)
+            variables = re.findall(r'^(?:const|let|var)\s+([a-zA-Z_$][a-zA-Z0-9_$]*)\s*=', content, re.MULTILINE)
+            if variables:
+                summary['variables'] = variables[:5]
+            
+            # Event listeners
+            event_listeners = re.findall(r'\.(addEventListener|onclick|onload|onchange|onsubmit)\s*\(', content)
+            if event_listeners:
+                summary['events'] = list(set(event_listeners))
+            
+            # Indica si hay lógica interactiva
+            if 'functions' in summary or 'event_listeners' in locals():
+                summary['has_interactivity'] = True
+        
+        # Python: extraer funciones, clases, imports
+        elif language == 'Python':
+            functions = re.findall(r'def\s+([a-zA-Z_][a-zA-Z0-9_]*)\s*\(', content)
+            if functions:
+                summary['functions'] = functions[:8]
+                summary['functions_count'] = len(functions)
+            
+            classes = re.findall(r'class\s+([a-zA-Z_][a-zA-Z0-9_]*)\s*[:\(]', content)
+            if classes:
+                summary['classes'] = classes[:5]
+                summary['classes_count'] = len(classes)
+            
+            imports = re.findall(r'^(?:from\s+(\S+)\s+import|import\s+(\S+))', content, re.MULTILINE)
+            if imports:
+                summary['imports_count'] = len(imports)
+        
+        return summary
     
     def _build_compact_context(self, repo_summary: Dict[str, Any]) -> str:
         """
         Construye un contexto compacto a partir del resumen del repositorio.
+        Sin fragmentos de código, solo información estructurada.
         """
         context_parts = []
         
         context_parts.append(f"El repositorio contiene {repo_summary['total_files']} archivos:\n")
         
         for file in repo_summary['files'][:8]:
+            # Información básica del archivo
             file_info = f"- **{file['path']}** ({file['language']}, {file['line_count']} lineas)"
             
+            # Propósito del archivo
             if file.get('purpose'):
                 file_info += f"\n  Proposito: {file['purpose']}"
             
+            # Título (para HTML)
             if file.get('title'):
                 file_info += f"\n  Titulo: {file['title']}"
             
+            # Funciones principales
             if file.get('functions'):
                 func_list = ', '.join(file['functions'][:5])
                 file_info += f"\n  Funciones: {func_list}"
-                if file['functions_count'] > 5:
+                if file.get('functions_count', 0) > 5:
                     file_info += f" (+{file['functions_count'] - 5} mas)"
             
+            # Clases principales
             if file.get('classes'):
                 class_list = ', '.join(file['classes'][:3])
                 file_info += f"\n  Clases: {class_list}"
             
+            # Clases CSS principales
             if file.get('main_classes'):
                 file_info += f"\n  Clases CSS: {', '.join(file['main_classes'][:5])}"
             
+            # Elementos clave (scripts, estilos)
             if file.get('key_elements'):
                 file_info += f"\n  Elementos: {', '.join(file['key_elements'])}"
             
