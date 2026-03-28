@@ -202,27 +202,32 @@ def show_welcome_page() -> None:
                         if path.exists():
                             with st.spinner(f"Cargando repositorio {repo['name']}..."):
                                 try:
-                                    rag_service = ServiceFactory.create_rag_service(
-                                        repo_name=repo['name'],
-                                        repo_path=path,
-                                        repo_id=repo['id'],
-                                        model_name=st.session_state.selected_model,
-                                        max_file_size_mb=st.session_state.max_file_size_mb,
-                                        include_docs=st.session_state.include_docs
-                                    )
+                                    repo_obj = st.session_state.repo_service.load_repository_from_db(repo['id'])
                                     
-                                    if rag_service:
-                                        st.session_state.rag_service = rag_service
-                                        st.session_state.current_repo = repo
-                                        st.session_state.repository_loaded = True
-                                        st.session_state.messages = []
+                                    if repo_obj:
+                                        rag_service = ServiceFactory.create_rag_service(
+                                            repo_name=repo_obj.name,
+                                            repo_path=repo_obj.path,
+                                            repo_id=repo['id'],
+                                            model_name=st.session_state.selected_model,
+                                            max_file_size_mb=st.session_state.max_file_size_mb,
+                                            include_docs=st.session_state.include_docs
+                                        )
                                         
-                                        st.session_state.agent_workflow = AgentWorkflow(rag_service)
-                                        st.success(f"✅ Repositorio {repo['name']} cargado")
-                                        st.success("🤖 Agentes LangGraph inicializados")
-                                        st.rerun()
+                                        if rag_service:
+                                            st.session_state.rag_service = rag_service
+                                            st.session_state.current_repo = repo_obj
+                                            st.session_state.repository_loaded = True
+                                            st.session_state.messages = []
+                                            
+                                            st.session_state.agent_workflow = AgentWorkflow(rag_service)
+                                            st.success(f"✅ Repositorio {repo['name']} cargado")
+                                            st.success("🤖 Agentes LangGraph inicializados")
+                                            st.rerun()
+                                        else:
+                                            st.error("❌ Error al crear el servicio RAG")
                                     else:
-                                        st.error("❌ Error al crear el servicio RAG")
+                                        st.error("❌ Error al cargar el repositorio desde BD")
                                 except Exception as e:
                                     st.error(f"❌ Error: {str(e)}")
                         else:

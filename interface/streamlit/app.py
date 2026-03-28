@@ -118,7 +118,6 @@ def _setup_services(repo) -> Tuple[bool, Any, Any, str]:
     Configura los servicios para un repositorio.
     Retorna (success, rag_service, agent_workflow, message)
     """
-    # Verificar cuota primero
     available, status, message = _check_quota()
     
     if not available:
@@ -452,12 +451,25 @@ def show_analysis_section() -> None:
     
     if 'current_repo' not in st.session_state or not st.session_state.current_repo:
         st.warning("⚠️ **Primero carga un repositorio**")
+        st.info("👉 Ve a la pestaña **Cargar Repositorio** para comenzar")
         return
     
     repo = st.session_state.current_repo
     
     if isinstance(repo, dict):
-        st.error("❌ Error: Repositorio cargado incorrectamente")
+        st.error("❌ **Error: Repositorio cargado incorrectamente**")
+        st.info("""
+        El repositorio se cargó solo con metadatos, no con los archivos completos.
+        
+        **¿Qué puedes hacer?**
+        - Vuelve a cargar el repositorio desde la página de inicio o desde 'Cargar Repositorio'
+        - Si el repositorio ya estaba indexado, debería cargarse correctamente
+        """)
+        
+        if repo.get('name'):
+            st.write(f"**Nombre:** {repo.get('name')}")
+            st.write(f"**Archivos:** {repo.get('file_count', 0)}")
+            st.write(f"**Líneas:** {repo.get('total_lines', 0)}")
         return
     
     col1, col2, col3, col4 = st.columns(4)
