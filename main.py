@@ -281,7 +281,7 @@ def main() -> NoReturn:
     setup_project_structure()
     
     st.set_page_config(
-        page_title="🤖 AI Coding Assistant",
+        page_title="AI Coding Assistant",
         page_icon="🤖",
         layout="wide",
         initial_sidebar_state="expanded"
