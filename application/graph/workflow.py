@@ -38,12 +38,6 @@ class AgentWorkflow:
         'extensión', 'extensiones', 'tipos de archivo', 'lenguajes'
     ]
     
-    GENERAL_QUERY_KEYWORDS = [
-        'qué hace', 'de qué trata', 'resumen', 'qué es', 'explica el repositorio',
-        'qué hace este proyecto', 'descripción', 'funcionalidad', 'propósito',
-        'qué contiene', 'qué archivos', 'estructura', 'que hace', 'que es'
-    ]
-    
     def __init__(self, rag_service: Optional[RAGService] = None):
         """
         Inicializa el flujo de trabajo.
@@ -64,15 +58,11 @@ class AgentWorkflow:
         self.memory = MemorySaver()
         self.graph = self._build_graph()
         
-        
         logger.info("AgentWorkflow inicializado correctamente")
     
     def _configure_agents(self, rag_service: RAGService) -> None:
         """
         Configura todos los agentes con los servicios del RAG.
-        
-        Args:
-            rag_service: Servicio RAG configurado
         """
         llm = rag_service.llm
         vector_store = rag_service.vector_store
@@ -95,9 +85,6 @@ class AgentWorkflow:
     def _build_graph(self) -> StateGraph:
         """
         Construye el grafo de agentes.
-        
-        Returns:
-            StateGraph configurado
         """
         workflow = StateGraph(AgentState)
         
@@ -138,8 +125,7 @@ class AgentWorkflow:
     
     def _route_to_agent(self, state: AgentState) -> str:
         """Determina qué agente usar."""
-        query_type = state.get('query_type', 'general')
-        return query_type
+        return state.get('query_type', 'general')
     
     def _explain_node(self, state: AgentState) -> AgentState:
         """Nodo del agente de explicación."""
@@ -157,25 +143,12 @@ class AgentWorkflow:
         return {**state, 'response': result, 'sources': result.get('sources', [])}
     
     def _is_stats_query(self, query: str) -> bool:
-        """
-        Determina si la consulta es sobre estadísticas del repositorio.
-        
-        Args:
-            query: Consulta del usuario
-            
-        Returns:
-            True si es consulta de estadísticas
-        """
+        """Determina si la consulta es sobre estadísticas."""
         query_lower = query.lower()
         return any(kw in query_lower for kw in self.STATS_KEYWORDS)
     
     def _get_repository_stats(self) -> Dict[str, Any]:
-        """
-        Obtiene estadísticas del repositorio desde la base de datos.
-        
-        Returns:
-            Diccionario con estadísticas
-        """
+        """Obtiene estadísticas del repositorio desde la base de datos."""
         if not self.rag_service:
             return {}
         
@@ -207,16 +180,7 @@ class AgentWorkflow:
             return {}
     
     def _format_stats_response(self, query: str, stats: Dict[str, Any]) -> str:
-        """
-        Formatea respuesta para consultas de estadísticas.
-        
-        Args:
-            query: Consulta del usuario
-            stats: Estadísticas del repositorio
-            
-        Returns:
-            Respuesta formateada
-        """
+        """Formatea respuesta para consultas de estadísticas."""
         query_lower = query.lower()
         
         if 'cuántos archivos' in query_lower or 'cuantos archivos' in query_lower or 'archivos tiene' in query_lower:
@@ -265,12 +229,9 @@ class AgentWorkflow:
         
         return response
     
-    def _create_context_retriever(self):
+    def _create_summary_agent(self):
         """
-        Crea un agente temporal para recuperar contexto.
-        
-        Returns:
-            ExplainAgent configurado
+        Crea un agente temporal para generar resúmenes.
         """
         from application.agents.explain_agent import ExplainAgent
         agent = ExplainAgent()
@@ -279,64 +240,46 @@ class AgentWorkflow:
             agent.set_repo_path(self.rag_service.repo_path)
             agent.set_cache_service(self.rag_service.cache)
             agent.set_embedding_service(self.rag_service.embedding)
-            agent.set_vector_store(self.rag_service.vector_store)
             agent.set_llm(self.rag_service.llm)
-            
-            repo_context = {
-                'name': self.rag_service.repo_name,
-                'id': self.rag_service.repo_id
-            }
-            agent.set_repo_context(repo_context)
         
         return agent
     
-    def _retrieve_general_context(self, query: str) -> tuple:
+    def _generate_compact_summary(self) -> tuple:
         """
-        Recupera contexto para consultas generales.
+        Genera un resumen compacto del repositorio.
         
-        Args:
-            query: Consulta del usuario
-            
         Returns:
-            Tupla (context_text, sources)
+            Tupla (summary_text, sources)
         """
-        agent = self._create_context_retriever()
-        fragments = agent._retrieve_context(query, k=5)
+        agent = self._create_summary_agent()
+        repo_summary = agent._generate_repository_summary()
         
-        if not fragments:
+        if not repo_summary['files']:
             return "", []
         
-        context_text = agent._build_context_text(fragments)
+        compact_context = agent._build_compact_context(repo_summary)
+        sources = [{'file': f['path'], 'score': 1.0} for f in repo_summary['files'][:5]]
         
-        sources = []
-        for f in fragments[:3]:
-            if isinstance(f, dict):
-                sources.append({'file': f.get('file', 'desconocido'), 'score': f.get('score', 0)})
+        logger.info(f"Resumen generado: {repo_summary['total_files']} archivos, {len(compact_context)} caracteres")
         
-        return context_text, sources
+        return compact_context, sources
     
     def _generate_general_response(self, query: str, context_text: str) -> str:
         """
         Genera respuesta para consulta general.
-        
-        Args:
-            query: Consulta del usuario
-            context_text: Contexto recuperado
-            
-        Returns:
-            Respuesta generada
         """
         instructions = """Eres un experto en analisis de codigo. Tu tarea es proporcionar un resumen claro y completo del repositorio.
 
-CARACTERISTICAS:
-- Explica que hace el repositorio en general
-- Menciona los tipos de archivos presentes (HTML, CSS, JavaScript, etc.)
-- Describe la estructura y funcionalidad principal
-- Si hay archivos de diferentes lenguajes, mencionarlos todos
-- Ser conciso pero completo
-- Responder en espanol"""
+                    CARACTERISTICAS:
+                    - Explica que hace el repositorio en general
+                    - Menciona los tipos de archivos presentes (HTML, CSS, JavaScript, etc.)
+                    - Describe la estructura y funcionalidad principal
+                    - Si hay archivos de diferentes lenguajes, mencionarlos todos
+                    - NO muestres codigo, solo describe la funcionalidad
+                    - Ser conciso pero completo
+                    - Responder en español"""
 
-        agent = self._create_context_retriever()
+        agent = self._create_summary_agent()
         prompt = agent._build_prompt(query, context_text, instructions)
         
         if self.rag_service and self.rag_service.llm:
@@ -350,6 +293,7 @@ CARACTERISTICAS:
         """
         query = state['query']
         
+        # Verificar si es consulta de estadísticas
         if self._is_stats_query(query):
             stats = self._get_repository_stats()
             if stats:
@@ -364,12 +308,13 @@ CARACTERISTICAS:
                     'sources': []
                 }
         
+        # Para consultas generales, generar resumen compacto
         if self.rag_service:
             try:
-                context_text, sources = self._retrieve_general_context(query)
+                compact_context, sources = self._generate_compact_summary()
                 
-                if context_text:
-                    answer = self._generate_general_response(query, context_text)
+                if compact_context:
+                    answer = self._generate_general_response(query, compact_context)
                     return {
                         **state,
                         'response': {
@@ -380,8 +325,9 @@ CARACTERISTICAS:
                         'sources': sources
                     }
             except Exception as e:
-                logger.error(f"Error en consulta general: {e}")
+                logger.error(f"Error generando resumen: {e}")
         
+        # Fallback: usar RAG normal
         if self.rag_service:
             result = self.rag_service.query(query, include_sources=True)
             return {
@@ -406,12 +352,6 @@ CARACTERISTICAS:
     def process(self, query: str) -> Dict[str, Any]:
         """
         Procesa una consulta a través del grafo de agentes.
-        
-        Args:
-            query: Consulta del usuario
-            
-        Returns:
-            Diccionario con respuesta y metadatos
         """
         try:
             logger.info(f"Procesando consulta: {query[:100]}...")
@@ -444,9 +384,6 @@ CARACTERISTICAS:
     def get_available_agents(self) -> Dict[str, str]:
         """
         Obtiene información de los agentes disponibles.
-        
-        Returns:
-            Diccionario con nombres y descripciones
         """
         return {
             'router': self.router.description,
