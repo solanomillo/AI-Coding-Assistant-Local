@@ -389,7 +389,14 @@ Las contribuciones son bienvenidas. Por favor, sigue estos pasos:
 - **Logs** sin emojis (solo UI)
 
 ---
+## **👨‍💻 Autor**
 
+**Julio Solano**  
+🔗 **GitHub:** [https://github.com/solanomillo](https://github.com/solanomillo)  
+🔗 **LinkedIn:** [https://www.linkedin.com/in/julio-cesar-solano](https://www.linkedin.com/in/julio-cesar-solano)  
+📧 **Email:** [solanomillo144@gmail.com](mailto:solanomillo144@gmail.com)
+
+---
 ## 📄 Licencia
 
 Este proyecto está bajo la licencia **MIT**. Ver el archivo `LICENSE` para más detalles.
