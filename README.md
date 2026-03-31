@@ -165,14 +165,14 @@ MAX_FRAGMENTS_PER_FILE=10
 
 ---
 
-##Obtener API Key de Gemini
-###Ve a Google AI Studio
+## Obtener API Key de Gemini
+- **Ve a Google AI Studio**
 
-1.**Inicia sesión con tu cuenta Google
+- **Inicia sesión con tu cuenta Google**
 
-2.**Crea una nueva API key
+- **Crea una nueva API key**
 
-3.**Copia la clave y pégala en .env o ingresala por la interfaz grafca y prueba su conexión.
+- **Copia la clave y pégala en .env o ingresala por la interfaz grafca y prueba su conexión.**
 
 ---
 
@@ -322,7 +322,7 @@ ai-coding-assistant/
 
 ---
 
-##🧪 Pruebas
+## 🧪 Pruebas
 ### Script de prueba de conexión
 ```bash
 python -c "
