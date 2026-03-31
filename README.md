@@ -110,7 +110,7 @@
 
 ```bash
 # 1. Clonar el repositorio
-git clone https://github.com/tu-usuario/ai-coding-assistant.git
+git clone https://github.com/solanomillo/AI-Coding-Assistant-Local.git
 cd ai-coding-assistant
 
 # 2. Crear entorno virtual
@@ -402,9 +402,3 @@ Este proyecto está bajo la licencia **MIT**. Ver el archivo `LICENSE` para más
 - **LangChain** por LangGraph
 - **FAISS** por la búsqueda vectorial
 - **Streamlit** por la interfaz
-
----
-
-<div align="center">
-  <sub>Construido con ❤️ por el equipo de AI Coding Assistant</sub>
-</div>
