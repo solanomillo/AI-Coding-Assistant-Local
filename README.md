@@ -218,7 +218,8 @@ Puedes elegir entre:
 
 ---
 
-## 🏗️ Arquitectura
+## 🏗️  Arquitectura
+
 ```text
 ┌─────────────────────────────────────────────────────────────────┐
 │                     INTERFAZ (Streamlit)                        │
@@ -253,7 +254,8 @@ Puedes elegir entre:
 
 ---
 
-##📁 Estructura del Proyecto
+## 📁 Estructura del Proyecto
+
 ```text
 ai-coding-assistant/
 ├── main.py                          # Punto de entrada
@@ -323,6 +325,7 @@ ai-coding-assistant/
 ---
 
 ## 🧪 Pruebas
+
 ### Script de prueba de conexión
 ```bash
 python -c "
